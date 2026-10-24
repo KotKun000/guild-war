@@ -9,6 +9,16 @@ const BASE = 'https://7katlas.com/';
 const OUT = path.resolve('public');
 const FORCE = process.argv.includes('--force');
 const SIZE = 128;
+// hero cards are tall like in-game cards
+const HERO_W = 112;
+const HERO_H = 140;
+const TYPE_ICONS = {
+  Attack: 'RoleIcon_Type01_Attack',
+  Magic: 'RoleIcon_Type02_Magic',
+  Defense: 'RoleIcon_Type03_Defense',
+  Support: 'RoleIcon_Type04_Support',
+  Universal: 'RoleIcon_Type05_Universal',
+};
 
 // Short names used in our data (from 7k-note) -> 7K Atlas English name. First alias becomes the display name.
 const HERO_ALIASES = {
@@ -61,7 +71,7 @@ async function scriptUrl(page, pattern) {
 
 const exists = (p) => access(p).then(() => true, () => false);
 
-async function download(src, dest, size = SIZE) {
+async function download(src, dest, size = SIZE, height = size) {
   if (!src) return null;
   const file = path.join(OUT, dest);
   if (FORCE || !(await exists(file))) {
@@ -72,7 +82,7 @@ async function download(src, dest, size = SIZE) {
     }
     await mkdir(path.dirname(file), { recursive: true });
     const buf = Buffer.from(await res.arrayBuffer());
-    await writeFile(file, await sharp(buf).resize(size, size, { fit: 'cover', position: 'top' }).webp({ quality: 82 }).toBuffer());
+    await writeFile(file, await sharp(buf).resize(size, height, { fit: 'cover', position: 'top' }).webp({ quality: 82 }).toBuffer());
   }
   return '/' + dest.replace(/\\/g, '/');
 }
@@ -109,9 +119,11 @@ async function main() {
       name: aliases[0],
       en: h.name,
       rarity: h.rarity,
+      type: h.type || null,
+      released: h.release_date || '',
       aliases: [...new Set(aliases)],
-      img: await download(best(h.portraits), `img/heroes/${h.id}.webp`),
-      awk: await download(h.portraits?.awk, `img/heroes/${h.id}-awk.webp`),
+      img: await download(best(h.portraits), `img/heroes/${h.id}.webp`, HERO_W, HERO_H),
+      awk: await download(h.portraits?.awk, `img/heroes/${h.id}-awk.webp`, HERO_W, HERO_H),
     };
   });
 
@@ -125,7 +137,12 @@ async function main() {
   const rings = {};
   for (const [th, key] of Object.entries(RINGS)) rings[th] = await download(`images/gears/acc/${key}.webp`, `img/rings/${key.split('/')[1]}.webp`, 48);
 
-  const byRarity = (a, b) => RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity) || a.name.localeCompare(b.name, 'th');
+  const types = {};
+  for (const [t, file] of Object.entries(TYPE_ICONS)) types[t] = await download(`images/classification/${file}.webp`, `img/types/${t}.webp`, 40);
+
+  // newest first inside each rarity group (like the in-game list)
+  const byRarity = (a, b) =>
+    RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity) || (b.released || '').localeCompare(a.released || '') || a.name.localeCompare(b.name, 'th');
   const assets = {
     source: '7K Atlas — https://7katlas.com',
     updatedAt: new Date().toISOString(),
@@ -133,6 +150,7 @@ async function main() {
     pets: petOut.filter((p) => p.img).sort(byRarity),
     sets,
     rings,
+    types,
   };
   await writeFile(path.join(OUT, 'assets.json'), JSON.stringify(assets));
   console.log(`wrote public/assets.json: ${assets.heroes.length} heroes, ${assets.pets.length} pets, ${Object.keys(sets).length} sets, ${Object.keys(rings).length} rings`);

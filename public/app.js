@@ -41,8 +41,8 @@ const DAY_KIND = {
   defense: { short: 'จัดบ้าน', full: 'วันจัดบ้าน', info: 'วันนี้วันจัดบ้าน — วางทีมป้องกันตามแผนกันให้เรียบร้อย' },
   rest: { short: 'พัก', full: 'วันพัก', info: 'วันนี้วันพัก — ไม่มีวอร์ ใช้เวลาเตรียมทีมและเก็บของ' },
 };
-const KIND_CYCLE = ['attack', 'defense', 'rest'];
-const DEFAULT_SCHEDULE = ['attack', 'defense', 'attack', 'rest', 'defense', 'attack', 'defense'];
+// Fixed by the game (Monday first)
+const SCHEDULE = ['attack', 'defense', 'attack', 'rest', 'defense', 'attack', 'defense'];
 
 // Thai time (UTC+7, no DST); dow 0 = Monday
 function bkkNow() {
@@ -69,21 +69,45 @@ const ICONS = {
   key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
   log: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  reset: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/>',
+  speed: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  filter: '<path d="M22 3H2l8 9.5V19l4 2v-8.5z"/>',
+  up: '<path d="m18 15-6-6-6 6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
 };
 const icon = (name, cls = '') =>
   raw(`<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`);
 const IDLE_LOCK_MS = 30 * 60e3;
+const TAG_PRESETS = ['เวท', 'กายภาพ', 'แทงก์', 'ความเร็ว', 'ต้องการของดี'];
 const NEXT_KEY = 'egg2k:next';
 
 // Unlock token is kept in memory only: reloading / closing the tab always asks for the password again.
-const state = { me: null, passwordSet: false, token: null, exp: 0, data: null, edit: null, admin: null, picker: null, lastActive: Date.now(), q: '', tag: '' };
+const state = {
+  me: null,
+  passwordSet: false,
+  token: null,
+  exp: 0,
+  data: null,
+  edit: null,
+  admin: null,
+  lastActive: Date.now(),
+  q: '',
+  tag: '',
+  // team editor
+  sel: null, // { team: path, field: 'slots' | 'pet' | 'extras', i, auto? }
+  activeTeam: null,
+  modal: null, // { kind: 'grid' | 'filter' | 'formation' | 'skills', team?, skills? }
+  step: 2,
+  dock: { tab: 'hero', q: '', rarity: '', type: '', petRarity: '', search: false, collapsed: false },
+};
 
 // ---------- game assets (self-hosted images, see scripts/fetch-assets.mjs) ----------
 const AS = { hero: new Map(), pet: new Map(), heroes: [], pets: [], sets: {}, rings: {} };
 const AWAKE_RE = /^(.*?)(\s+awake(?:\s+epic)?)?$/i;
 
 function buildAssets(a) {
-  Object.assign(AS, { heroes: a.heroes, pets: a.pets, sets: a.sets, rings: a.rings });
+  Object.assign(AS, { heroes: a.heroes, pets: a.pets, sets: a.sets, rings: a.rings, types: a.types || {} });
   for (const h of a.heroes) for (const n of h.aliases) AS.hero.set(n, h);
   for (const p of a.pets) for (const n of p.aliases) AS.pet.set(n, p);
 }
@@ -239,29 +263,86 @@ async function copyLink(hash) {
   }
 }
 
-// ---------- team rendering ----------
-function teamView(team, skills = team?.skills || []) {
-  const f = team?.front || 2;
-  const slot = (i) => {
-    const n = team.slots[i];
-    if (!n) return html`<div class="slot empty">·</div>`;
-    const h = heroInfo(n);
-    return html`<div class="slot ${h.img ? 'has-img' : ''}" title="${n}">${portrait(h.img)}${h.awake ? html`<span class="awk">AWK</span>` : ''}<span class="nm">${h.base}</span></div>`;
-  };
-  const extras = (team.extras || []).filter(Boolean);
-  return html`<div class="team">
-    <div class="formation"><b>รูปแบบ${FORMATIONS[f] || ''}</b> หน้า ${f} / หลัง ${5 - f}${team.speed ? html` · <span class="speed">สปีด ${team.speed}</span>` : ''}</div>
-    <div class="rows">
-      <div class="row"><span class="row-label">หน้า</span>${[...Array(f).keys()].map(slot)}</div>
-      <div class="row"><span class="row-label">หลัง</span>${[...Array(5 - f).keys()].map((i) => slot(i + f))}</div>
-    </div>
-    <div class="team-meta">
-      ${team.pet ? petChip(team.pet) : ''}
-      ${extras.length ? html`<span class="muted">สำรอง:</span> ${extras.map(petChip)}` : ''}
-    </div>
-    ${skills.length ? html`<div class="skills">${skills.map((s, i) => html`<span class="skill"><b>${i + 1}</b> ${team.slots[s.slot] || `ช่อง ${s.slot + 1}`} สกิล${s.skill}</span>`)}</div>` : ''}
+// ---------- team board (in-game layout: front column · back column · pet/formation/skills) ----------
+const MAX_HEROES = 3;
+const MAX_SKILLS = 3;
+const SKILL_LABEL = { 1: 'บน', 2: 'ล่าง', 3: 'อเวค' };
+const RARITY_GROUPS = [
+  ['L++', 'O7K · Seven Knights of Old', 'O7K'],
+  ['L+', 'ทองบน (L+)', 'ทองบน'],
+  ['L', 'ทองล่าง (L)', 'ทองล่าง'],
+  ['R', 'ม่วง (R)', 'ม่วง'],
+];
+const TYPES = [
+  ['Attack', 'โจมตี'],
+  ['Magic', 'เวท'],
+  ['Defense', 'ป้องกัน'],
+  ['Support', 'สนับสนุน'],
+  ['Universal', 'สมดุล'],
+];
+
+// formation diagram: blue shields = front row, red dots = back row
+const formationDots = (f) =>
+  html`<span class="fdots">${[...Array(5 - f).keys()].map(() => html`<i class="back"></i>`)}${[...Array(f).keys()].map(() => html`<i class="front"></i>`)}</span>`;
+
+function heroCard(name, { cls = '', attrs = raw('') } = {}) {
+  if (!name) return html`<div class="hcard empty ${cls}" ${attrs}><span class="plus">+</span></div>`;
+  const info = heroInfo(name);
+  const h = AS.hero.get(info.base);
+  return html`<div class="hcard ${h?.type ? `t-${h.type}` : ''} ${cls}" title="${name}" ${attrs}>
+    ${portrait(info.img)}
+    ${h?.type && AS.types?.[h.type] ? html`<img class="type" src="${AS.types[h.type]}" alt="" />` : ''}
+    ${info.awake ? html`<span class="awk">AWK</span>` : ''}
+    <span class="nm">${info.base}</span>
   </div>`;
 }
+
+function petCard(name, cls = '') {
+  const p = AS.pet.get(name);
+  return html`<div class="pcard ${name ? '' : 'empty'} ${cls}" title="${name || ''}">${name ? (p ? portrait(p.img) : html`<span class="nm">${name}</span>`) : html`<span class="plus">+</span>`}</div>`;
+}
+
+// edit = { prefix, skillsPath } turns the board into an editor (slots become clickable)
+function board(team, skills, title = '', edit = null) {
+  const f = team.front || 2;
+  const sel = state.sel;
+  const isSel = (field, i) => edit && sel && sel.team === edit.prefix && sel.field === field && (field === 'pet' || sel.i === i);
+  const act = (action, extra = '') => (edit ? raw(`role="button" tabindex="0" data-action="${action}" data-team="${esc(edit.prefix)}" ${extra}`) : raw(''));
+  const slot = (i) =>
+    html`<div class="slot-wrap">${heroCard(team.slots[i], { cls: isSel('slots', i) ? 'selected' : edit ? '' : 'ghost', attrs: act('slot', `data-field="slots" data-i="${i}"`) })}
+      ${edit && team.slots[i] ? html`<button type="button" class="x" data-action="slot-clear" data-team="${edit.prefix}" data-field="slots" data-i="${i}" title="เอาออก">×</button>` : ''}
+      ${edit && team.slots[i] && AS.hero.get(heroInfo(team.slots[i]).base)?.awk ? html`<button type="button" class="awk-toggle" data-action="toggle-awk" data-team="${edit.prefix}" data-i="${i}" title="สลับร่างปกติ/อเวค">⟳</button>` : ''}
+    </div>`;
+  const petSlot = (field, i, value, small) =>
+    html`<div class="slot-wrap" ${act('slot', `data-field="${field}" data-i="${i}"`)}>${petCard(value, `${small ? 'small' : ''} ${isSel(field, i) ? 'selected' : ''}`)}</div>`;
+  const heroes = heroesOf(team);
+  return html`<div class="board ${edit && state.activeTeam === edit.prefix ? 'active' : ''}">
+    ${title || edit ? html`<div class="board-head"><b>${title}</b>${edit ? html`<button type="button" class="btn icon ghost small" data-action="team-reset" data-team="${edit.prefix}" data-skills="${edit.skillsPath}" title="ล้างทีม">${icon('reset')}</button>` : ''}</div>` : ''}
+    <div class="board-top">
+      ${edit
+        ? html`<label class="speed-in">${icon('speed')}<input type="number" min="0" value="${team.speed || ''}" placeholder="0" data-bind="${edit.prefix}.speed" data-type="num" /></label>`
+        : team.speed ? html`<span class="speed-in">${icon('speed')}<b>${team.speed}</b></span>` : ''}
+    </div>
+    <div class="board-grid">
+      <div class="col front">${[...Array(f).keys()].map(slot)}<span class="col-label">หน้า</span></div>
+      <div class="col back">${[...Array(5 - f).keys()].map((i) => slot(i + f))}<span class="col-label">หลัง</span></div>
+      <div class="col side">
+        ${petSlot('pet', 0, team.pet)}
+        <div class="round formation" ${act('open-formation')} title="รูปแบบ${FORMATIONS[f]} · หน้า ${f} หลัง ${5 - f}">${formationDots(f)}<span>${FORMATIONS[f]}</span></div>
+        ${edit || skills.length
+          ? html`<div class="round skills" ${edit ? act('open-skills', `data-skills="${esc(edit.skillsPath)}"`) : raw('')} title="ลำดับการใช้สกิล">
+              ${skills.length
+                ? html`<span class="sk-list">${skills.map((s, i) => html`<span><b>${i + 1}</b>${portrait(heroInfo(team.slots[s.slot]).img, 'ico')}${SKILL_LABEL[s.skill] || s.skill}</span>`)}</span>`
+                : html`<span class="muted small">${heroes.length ? 'ลำดับสกิล' : '—'}</span>`}
+            </div>`
+          : ''}
+      </div>
+    </div>
+    <div class="reserve"><span>สัตว์เลี้ยงสำรอง</span>${[0, 1, 2, 3].map((i) => (edit || team.extras[i] ? petSlot('extras', i, team.extras[i], true) : ''))}</div>
+  </div>`;
+}
+
+const teamView = (team, skills = team?.skills || []) => board(team, skills);
 
 function heroNotesView(notes) {
   const list = (notes || []).filter((n) => n.text || n.sets.length || n.rings.length || Object.keys(n.stats).length);
@@ -281,47 +362,18 @@ function heroNotesView(notes) {
 }
 
 // ---------- team editor (bound to state.edit via data-bind paths) ----------
-function teamEditor(prefix, team, skills, skillsPath, notes, notesPath) {
-  const f = team.front || 2;
-  const pickBtn = (kind, path, value, placeholder) => {
-    const img = kind === 'hero' ? heroInfo(value).img : AS.pet.get(value)?.img;
-    return html`<button type="button" class="slot pick ${value ? 'has-img' : 'empty'}" data-action="pick" data-kind="${kind}" data-path="${path}">
-      ${value ? html`${portrait(img)}${kind === 'hero' && heroInfo(value).awake ? html`<span class="awk">AWK</span>` : ''}<span class="nm">${kind === 'hero' ? heroInfo(value).base : value}</span>` : html`<span class="nm">+ ${placeholder}</span>`}
-    </button>`;
-  };
-  const slotInput = (i) => pickBtn('hero', `${prefix}.slots.${i}`, team.slots[i], `ช่อง ${i + 1}`);
+function teamEditor(prefix, team, skills, skillsPath, notes, notesPath, title = '') {
+  if (!state.activeTeam) state.activeTeam = prefix;
   return html`<div class="team-editor">
-    <div class="grid2">
-      <label>รูปแบบ
-        <select data-bind="${prefix}.front" data-type="num" data-rerender>
-          ${Object.entries(FORMATIONS).map(([k, v]) => html`<option value="${k}" ${Number(k) === f ? raw('selected') : ''}>${v} (หน้า ${k} / หลัง ${5 - k})</option>`)}
-        </select>
-      </label>
-      <label>สปีดรวม <input type="number" min="0" value="${team.speed || ''}" data-bind="${prefix}.speed" data-type="num" /></label>
-    </div>
-    <div class="rows edit">
-      <div class="row"><span class="row-label">หน้า</span>${[...Array(f).keys()].map(slotInput)}</div>
-      <div class="row"><span class="row-label">หลัง</span>${[...Array(5 - f).keys()].map((i) => slotInput(i + f))}</div>
-    </div>
-    <div class="grid2">
-      <div><span class="lbl">สัตว์เลี้ยง</span><div class="pet-pick">${pickBtn('pet', `${prefix}.pet`, team.pet, 'สัตว์เลี้ยง')}</div></div>
-      <div><span class="lbl">สัตว์เลี้ยงสำรอง</span><div class="extras">${[0, 1, 2, 3].map((i) => pickBtn('pet', `${prefix}.extras.${i}`, team.extras[i], 'สำรอง'))}</div></div>
-    </div>
-    <div class="skill-editor">
-      <span class="lbl">ลำดับสกิล</span>
-      ${skills.map(
-        (s, i) => html`<div class="skill-row"><b>${i + 1}</b>
-          <select data-bind="${skillsPath}.${i}.slot" data-type="num">${team.slots.map((h, si) =>
-            h ? html`<option value="${si}" ${s.slot === si ? raw('selected') : ''}>${h}</option>` : '',
-          )}</select>
-          <select data-bind="${skillsPath}.${i}.skill" data-type="num">${[1, 2].map((k) => html`<option value="${k}" ${s.skill === k ? raw('selected') : ''}>สกิล ${k}</option>`)}</select>
-          <button class="btn small ghost" data-action="skill-del" data-path="${skillsPath}" data-i="${i}">ลบ</button>
-        </div>`,
-      )}
-      ${heroesOf(team).length && skills.length < 6 ? html`<button class="btn small" data-action="skill-add" data-path="${skillsPath}" data-team="${prefix}">+ เพิ่มสกิล</button>` : ''}
-    </div>
-    ${notes
-      ? html`<div class="hn-editor">${notes.map(
+    <p class="board-hint">แตะช่องเพื่อเลือก แล้วแตะการ์ดในแถบด้านล่างเพื่อใส่ตัว · แตะตัวในทีมแล้วแตะอีกช่องเพื่อสลับ · ใส่ได้ ${MAX_HEROES} ตัว</p>
+    ${board(team, skills, title, { prefix, skillsPath })}
+    ${notes ? notesEditor(notes, notesPath) : ''}
+  </div>`;
+}
+
+function notesEditor(notes, notesPath) {
+  if (!notes.length) return html`<p class="muted center small">ใส่อัศวินในทีมก่อน แล้วค่อยจดอุปกรณ์/ค่าความสามารถ</p>`;
+  return html`<div class="hn-editor">${notes.map(
           (n, i) => html`<fieldset>
             <legend>${portrait(heroInfo(n.hero).img, 'ico lg')}${n.hero}</legend>
             <div class="grid2">
@@ -333,9 +385,7 @@ function teamEditor(prefix, team, skills, skillsPath, notes, notesPath) {
             )}</div>
             <label>โน้ต <textarea rows="2" data-bind="${notesPath}.${i}.text">${n.text}</textarea></label>
           </fieldset>`,
-        )}</div>`
-      : ''}
-  </div>`;
+  )}</div>`;
 }
 
 // keep heroNotes / skills consistent with heroes in the team
@@ -343,8 +393,61 @@ function syncTeam(team, skills, notes) {
   for (let i = skills.length - 1; i >= 0; i--) if (!team.slots[skills[i].slot]) skills.splice(i, 1);
   if (!notes) return;
   const heroes = heroesOf(team);
-  const next = heroes.map((h) => notes.find((n) => n.hero === h) || { hero: h, text: '', sets: [], rings: [], stats: {} });
+  // match notes by base name so toggling awake keeps the notes
+  const base = (n) => heroInfo(n).base;
+  const next = heroes.map((h) => {
+    const n = notes.find((x) => x.hero === h) || notes.find((x) => base(x.hero) === base(h));
+    return n ? { ...n, hero: h } : { hero: h, text: '', sets: [], rings: [], stats: {} };
+  });
   notes.splice(0, notes.length, ...next);
+}
+
+// ---------- team editing operations (board + dock) ----------
+const teamAt = (prefix) => getPath(state.edit, prefix);
+const skillsFor = (prefix) => getPath(state.edit, prefix.replace(/team$/, 'skills'));
+const heroBase = (n) => heroInfo(n).base;
+const defaultHeroName = (h) => (h.awk ? `${h.name} awake` : h.name);
+
+function placeHero(prefix, value) {
+  const team = teamAt(prefix);
+  const existing = team.slots.findIndex((n) => n && heroBase(n) === heroBase(value));
+  if (existing >= 0) {
+    team.slots[existing] = null; // tapping a hero already in the team removes it
+    return;
+  }
+  let i = state.sel?.team === prefix && state.sel.field === 'slots' ? state.sel.i : team.slots.findIndex((n) => !n);
+  if (i < 0) return toast('ทีมเต็มแล้ว — เอาตัวออกก่อน', true);
+  if (!team.slots[i] && heroesOf(team).length >= MAX_HEROES) return toast(`ใส่ได้สูงสุด ${MAX_HEROES} ตัว`, true);
+  team.slots[i] = value;
+  const next = team.slots.findIndex((n) => !n);
+  state.sel = next >= 0 && heroesOf(team).length < MAX_HEROES ? { team: prefix, field: 'slots', i: next, auto: true } : null;
+}
+
+function placePet(prefix, value) {
+  const team = teamAt(prefix);
+  const sel = state.sel?.team === prefix && state.sel.field !== 'slots' ? state.sel : null;
+  if (!sel && [team.pet, ...team.extras].includes(value)) {
+    // tapping a pet already in the team removes it
+    if (team.pet === value) team.pet = null;
+    else team.extras[team.extras.indexOf(value)] = null;
+    return;
+  }
+  if (sel) {
+    if (sel.field === 'pet') team.pet = value;
+    else team.extras[sel.i] = value;
+  } else if (!team.pet) team.pet = value;
+  else {
+    const i = team.extras.findIndex((n) => !n);
+    if (i < 0) return toast('ช่องสัตว์เลี้ยงเต็มแล้ว', true);
+    team.extras[i] = value;
+  }
+  state.sel = null;
+}
+
+function swapSlots(prefix, a, b) {
+  const team = teamAt(prefix);
+  [team.slots[a], team.slots[b]] = [team.slots[b], team.slots[a]];
+  for (const s of skillsFor(prefix) || []) s.slot = s.slot === a ? b : s.slot === b ? a : s.slot;
 }
 
 const getPath = (obj, path) => path.split('.').reduce((o, k) => o?.[k], obj);
@@ -380,7 +483,6 @@ function viewLogin() {
   </section>`;
 }
 
-const schedule = () => state.data?.schedule || DEFAULT_SCHEDULE;
 
 function hqCard() {
   const d = state.data;
@@ -398,23 +500,16 @@ function hqCard() {
 }
 
 function weekCard() {
-  const s = schedule();
   const { dow } = bkkNow();
-  const kind = s[dow];
-  const editable = can('editor');
+  const kind = SCHEDULE[dow];
   return html`<section class="panel frame week">
     <div class="week-head">
       <h3>${icon('calendar')} วัน${DAYS[dow]} <span class="pill ${kind}">${DAY_KIND[kind].full}</span></h3>
-      <div class="days">${s.map((k, i) => {
-        const inner = html`<b>${DAY_SHORT[i]}</b><span>${DAY_KIND[k].short}</span>`;
-        const cls = `day ${k} ${i === dow ? 'today' : ''}`;
-        return editable
-          ? html`<button type="button" class="${cls}" data-action="day-cycle" data-i="${i}" title="วัน${DAYS[i]}: ${DAY_KIND[k].full} — คลิกเพื่อเปลี่ยน">${inner}</button>`
-          : html`<div class="${cls}" title="วัน${DAYS[i]}: ${DAY_KIND[k].full}">${inner}</div>`;
-      })}</div>
+      <div class="days">${SCHEDULE.map(
+        (k, i) => html`<div class="day ${k} ${i === dow ? 'today' : ''}" title="วัน${DAYS[i]}: ${DAY_KIND[k].full}"><b>${DAY_SHORT[i]}</b><span>${DAY_KIND[k].short}</span></div>`,
+      )}</div>
     </div>
     <div class="week-info">${DAY_KIND[kind].info}</div>
-    ${editable ? html`<div class="legend">คลิกที่วันเพื่อสลับ ตี → จัดบ้าน → พัก (บันทึกอัตโนมัติ)</div>` : ''}
   </section>`;
 }
 
@@ -536,14 +631,25 @@ function viewTargetEdit(id) {
   }
   const e = state.edit;
   syncTeam(e.team, e.skills);
+  const tags = [...new Set([...TAG_PRESETS, ...allNames().tags, ...e.tags])];
   return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id === 'new' ? '#/' : `#/t/${id}`}">${icon('back')} ยกเลิก</a><h2>${id === 'new' ? 'เพิ่มบ้านศัตรู' : 'แก้ไขบ้านศัตรู'}</h2></div>
-    <div class="panel">
-      ${teamEditor('team', e.team, e.skills, 'skills')}
-      <label>แท็ก (คั่นด้วย ,) <input list="dl-tags" value="${e.tags.join(', ')}" data-bind="tags" data-type="list" /></label>
-      <label>โน้ต <textarea rows="3" data-bind="note">${e.note}</textarea></label>
-      <div class="actions"><button class="btn primary" data-action="save-target" data-id="${id}">บันทึก</button></div>
-    </div>`;
+    <div class="panel frame editor-panel">
+      ${teamEditor('team', e.team, e.skills, 'skills', null, null, 'บ้านศัตรู')}
+      <div class="lbl">แท็ก</div>
+      <div class="tag-pick">
+        ${tags.map((x) => html`<button type="button" class="tagbtn ${e.tags.includes(x) ? 'on' : ''}" data-action="tag-toggle" data-tag="${x}">${e.tags.includes(x) ? '✓' : '+'} ${x}</button>`)}
+        <input class="tag-in" placeholder="แท็กอื่น + Enter" data-tag-input />
+      </div>
+      <label>โน้ต <textarea rows="3" data-bind="note" placeholder="เช่น ความเร็วประมาณเท่าไร ต้องระวังอะไร">${e.note}</textarea></label>
+    </div>
+    <div class="sticky-actions"><a class="btn ghost" href="${id === 'new' ? '#/' : `#/t/${id}`}">ยกเลิก</a><button class="btn primary" data-action="save-target" data-id="${id}">บันทึก</button></div>`;
 }
+
+const STEPS = ['บ้านที่จะตี', 'ทีมแก้', 'อุปกรณ์/ค่าความสามารถ'];
+const stepTabs = () =>
+  html`<nav class="steps">${STEPS.map(
+    (l, i) => html`${i ? html`<span class="sep">›</span>` : ''}<a href="#" class="${state.step === i + 1 ? 'active' : state.step > i + 1 ? 'done' : ''}" data-action="step" data-step="${i + 1}"><b>${i + 1}</b> ${l}</a>`,
+  )}</nav>`;
 
 function viewCounterEdit(tid, cid) {
   const t = findTarget(tid);
@@ -555,12 +661,24 @@ function viewCounterEdit(tid, cid) {
   }
   const e = state.edit;
   syncTeam(e.team, e.skills, e.heroNotes);
+  const s = state.step;
   return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="#/t/${tid}">${icon('back')} ยกเลิก</a><h2>${cid === 'new' ? 'เพิ่มทีมแก้' : 'แก้ไขทีมแก้'}</h2></div>
-    <div class="panel enemy compact"><div class="muted small">บ้านศัตรู</div>${teamView(t.team)}</div>
-    <div class="panel">
-      ${teamEditor('team', e.team, e.skills, 'skills', e.heroNotes, 'heroNotes')}
-      <label>โน้ตทีม <textarea rows="3" data-bind="note">${e.note}</textarea></label>
-      <div class="actions"><button class="btn primary" data-action="save-counter" data-tid="${tid}" data-id="${cid}">บันทึก</button></div>
+    ${stepTabs()}
+    ${s === 1
+      ? html`<div class="panel enemy frame editor-panel"><div class="board-title">บ้านที่จะตี</div>${teamView(t.team)}${t.note ? html`<div class="pre note">${t.note}</div>` : ''}</div>`
+      : s === 2
+        ? html`<div class="vs-strip"><span class="muted small">VS</span>${heroesOf(t.team).map((n) => heroCard(n, { cls: 'mini' }))}</div>
+          <div class="panel frame editor-panel">
+            ${teamEditor('team', e.team, e.skills, 'skills', null, null, 'ทีมแก้')}
+            <label>โน้ตทีม <textarea rows="3" data-bind="note" placeholder="เช่น ลำดับการกด ต้องให้ใครเร็วกว่า">${e.note}</textarea></label>
+          </div>`
+        : html`<div class="panel frame editor-panel">${notesEditor(e.heroNotes, 'heroNotes')}</div>`}
+    <div class="sticky-actions">
+      <a class="btn ghost" href="#/t/${tid}">ยกเลิก</a>
+      <span class="spacer"></span>
+      ${s > 1 ? html`<button class="btn" data-action="step" data-step="${s - 1}">ย้อนกลับ</button>` : ''}
+      ${s < 3 ? html`<button class="btn" data-action="step" data-step="${s + 1}">ถัดไป</button>` : ''}
+      <button class="btn primary" data-action="save-counter" data-tid="${tid}" data-id="${cid}">บันทึก</button>
     </div>`;
 }
 
@@ -642,7 +760,8 @@ function viewPlanEdit(id) {
           (o, oi) => html`<div class="option">
             <div class="toolbar"><b>ตัวเลือก ${oi + 1}</b><button class="btn small ghost" data-action="plan-opt-del" data-i="${si}" data-j="${oi}">ลบตัวเลือก</button></div>
             <label>เงื่อนไข <input value="${o.condition}" data-bind="data.slots.${si}.options.${oi}.condition" /></label>
-            ${teamEditor(`data.slots.${si}.options.${oi}.team`, o.team, o.skills, `data.slots.${si}.options.${oi}.skills`, o.heroNotes, `data.slots.${si}.options.${oi}.heroNotes`)}
+            ${teamEditor(`data.slots.${si}.options.${oi}.team`, o.team, o.skills, `data.slots.${si}.options.${oi}.skills`, null, null, `${s.name} · ตัวเลือก ${oi + 1}`)}
+            <details class="hn-details"><summary>อุปกรณ์/ค่าความสามารถ (${o.heroNotes.length} ตัว)</summary>${notesEditor(o.heroNotes, `data.slots.${si}.options.${oi}.heroNotes`)}</details>
             <label>โน้ต <textarea rows="2" data-bind="data.slots.${si}.options.${oi}.notes">${o.notes}</textarea></label>
           </div>`,
         )}
@@ -723,45 +842,152 @@ function viewAdmin() {
     </div>`;
 }
 
-function viewPicker() {
-  const p = state.picker;
-  const list = p.kind === 'hero' ? AS.heroes : AS.pets;
-  const rarities = [...new Set(list.map((x) => x.rarity))];
-  const tiles = [];
-  for (const x of list) {
-    if (p.rarity && x.rarity !== p.rarity) continue;
-    const search = x.aliases.join(' ').toLowerCase();
-    tiles.push({ value: x.name, img: x.img, label: x.name, search });
-    if (p.kind === 'hero' && x.awk) tiles.push({ value: `${x.name} awake`, img: x.awk, label: x.name, awk: true, search: `${search} awake awk` });
-  }
-  return html`<div class="modal-bg" data-action="pick-close">
-    <div class="modal">
-      <div class="toolbar">
-        <h3>เลือก${p.kind === 'hero' ? 'ฮีโร่' : 'สัตว์เลี้ยง'}</h3>
-        <input class="search" type="search" placeholder="ค้นหาชื่อ (ไทย/อังกฤษ)" data-pick-search />
-        <button class="btn small ghost" data-action="pick-close">✕</button>
+// ---------- dock: bottom strip of hero / pet cards with search + filters ----------
+const searchKey = (x) => x.aliases.join(' ').toLowerCase();
+const matchQ = (x) => {
+  const words = state.dock.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return words.every((w) => searchKey(x).includes(w));
+};
+const dockHeroes = () => AS.heroes.filter((h) => (!state.dock.rarity || h.rarity === state.dock.rarity) && (!state.dock.type || h.type === state.dock.type));
+const dockPets = () => AS.pets.filter((p) => !state.dock.petRarity || p.rarity === state.dock.petRarity);
+
+function usedIn(prefix) {
+  const t = prefix && teamAt(prefix);
+  if (!t) return { heroes: new Set(), pets: new Set() };
+  return { heroes: new Set(heroesOf(t).map(heroBase)), pets: new Set([t.pet, ...t.extras].filter(Boolean)) };
+}
+
+function dockCard(x, kind, used) {
+  const on = kind === 'hero' ? used.heroes.has(x.name) : used.pets.has(x.name);
+  const hidden = !matchQ(x);
+  if (kind === 'pet')
+    return html`<button type="button" class="dcard pet ${on ? 'used' : ''}" data-action="dock-pick" data-kind="pet" data-value="${x.name}" data-search="${searchKey(x)}" title="${x.name}" ${hidden ? raw('hidden') : ''}>
+      ${portrait(x.img)}<span class="nm">${x.name}</span>
+    </button>`;
+  return html`<button type="button" class="dcard t-${x.type || 'none'} ${on ? 'used' : ''}" data-action="dock-pick" data-kind="hero" data-value="${defaultHeroName(x)}" data-search="${searchKey(x)}" title="${x.name}" ${hidden ? raw('hidden') : ''}>
+    ${portrait(x.awk || x.img)}
+    ${x.type && AS.types?.[x.type] ? html`<img class="type" src="${AS.types[x.type]}" alt="" />` : ''}
+    ${x.awk ? html`<span class="awk-dot" title="มีร่างอเวค"></span>` : ''}
+    <span class="nm">${x.name}</span>
+  </button>`;
+}
+
+function dockHint() {
+  const s = state.sel;
+  if (!s) return 'แตะการ์ดเพื่อใส่ในช่องว่างถัดไป หรือแตะช่องในทีมก่อน';
+  if (s.field === 'slots') return `เลือกช่อง ${s.i + 1} อยู่ — แตะอัศวินเพื่อใส่ หรือแตะอีกช่องเพื่อสลับ`;
+  return s.field === 'pet' ? 'เลือกช่องสัตว์เลี้ยงหลักอยู่' : `เลือกสัตว์เลี้ยงสำรอง ${s.i + 1} อยู่`;
+}
+
+function viewDock() {
+  const d = state.dock;
+  const used = usedIn(state.sel?.team || state.activeTeam);
+  const filtered = d.tab === 'hero' ? d.rarity || d.type : d.petRarity;
+  const list = d.tab === 'hero' ? dockHeroes() : dockPets();
+  return html`<div class="dock ${d.collapsed ? 'collapsed' : ''}">
+    <button type="button" class="dock-toggle" data-action="dock-collapse" title="${d.collapsed ? 'เปิดแถบ' : 'เก็บแถบ'}">${icon(d.collapsed ? 'up' : 'down')}</button>
+    <div class="dock-inner">
+      <div class="dock-bar">
+        <button type="button" class="btn icon" data-action="modal" data-modal="grid" title="ดูทั้งหมด">${icon('grid')}</button>
+        <button type="button" class="btn icon ${d.search || d.q ? 'on' : ''}" data-action="dock-search" title="ค้นหาชื่อ">${icon('search')}</button>
+        <button type="button" class="btn icon ${filtered ? 'on' : ''}" data-action="modal" data-modal="filter" title="กรองประเภท">${icon('filter')}</button>
+        <div class="seg mini">
+          <a href="#" class="${d.tab === 'hero' ? 'active' : ''}" data-action="dock-tab" data-tab="hero">อัศวิน</a>
+          <a href="#" class="${d.tab === 'pet' ? 'active' : ''}" data-action="dock-tab" data-tab="pet">สัตว์เลี้ยง</a>
+        </div>
+        ${d.search || d.q ? html`<input class="dock-q" type="search" placeholder="ค้นหาชื่อ (ไทย/อังกฤษ)" value="${d.q}" data-dock-q />` : ''}
+        <span class="dock-hint">${dockHint()}</span>
       </div>
-      <div class="tabs">${['', ...rarities].map(
-        (r) => html`<button class="btn small ${p.rarity === r ? 'active' : ''}" data-action="pick-rarity" data-r="${r}">${r || 'ทั้งหมด'}</button>`,
-      )}</div>
-      ${list.length ? '' : html`<p class="muted">ยังไม่มีไฟล์รูป — รัน <code>npm run assets</code></p>`}
-      <div class="pick-grid">${tiles.map(
-        (t) => html`<button type="button" class="tile ${t.value === p.current ? 'selected' : ''}" data-action="pick-set" data-value="${t.value}" data-search="${t.search}" title="${t.value}">
-          ${portrait(t.img)}${t.awk ? html`<span class="awk">AWK</span>` : ''}<span class="nm">${t.label}</span>
-        </button>`,
-      )}</div>
-      <div class="pick-foot">
-        <button class="btn small danger" data-action="pick-set" data-value="">ล้างช่อง</button>
-        <form data-form="pick-custom" class="inline"><input name="name" placeholder="ไม่มีในรายการ? พิมพ์ชื่อเอง" /><button class="btn small">ใช้ชื่อนี้</button></form>
-      </div>
+      <div class="dock-strip">${list.map((x) => dockCard(x, d.tab, used))}${list.length ? '' : html`<span class="muted small">ไม่พบตามตัวกรอง</span>`}</div>
     </div>
   </div>`;
 }
 
-function setPicked(value) {
-  setPath(state.edit, state.picker.path, value || null);
-  state.picker = null;
-  render();
+function viewModal() {
+  const m = state.modal;
+  const close = html`<button type="button" class="btn icon ghost" data-action="modal-close" title="ปิด">✕</button>`;
+  const wrap = (title, body, cls = '') => html`<div class="modal-bg" data-action="modal-close"><div class="modal frame ${cls}"><div class="modal-head"><h3>${title}</h3>${close}</div>${body}</div></div>`;
+  const d = state.dock;
+
+  if (m.kind === 'filter') {
+    const opt = (key, val, label, dot = '') =>
+      html`<button type="button" class="fopt ${d[key] === val ? 'active' : ''}" data-action="set-filter" data-key="${key}" data-val="${val}">${dot ? html`<i class="dot ${dot}"></i>` : ''}${label}</button>`;
+    return d.tab === 'hero'
+      ? wrap(
+          'กรองอัศวิน',
+          html`<div class="flabel">ระดับ</div>
+          <div class="fgrid">${opt('rarity', '', 'ทั้งหมด')}${RARITY_GROUPS.map(([r, , short]) => opt('rarity', r, short, `r-${r.replace(/\+/g, 'p')}`))}</div>
+          <div class="flabel">ธาตุ</div>
+          <div class="fgrid">${opt('type', '', 'ทั้งหมด')}${TYPES.map(([t, label]) => opt('type', t, label, `t-${t}`))}</div>
+          <button type="button" class="btn primary block" data-action="modal-close">ตกลง</button>`,
+          'small',
+        )
+      : wrap(
+          'กรองสัตว์เลี้ยง',
+          html`<div class="flabel">ระดับ</div>
+          <div class="fgrid">${opt('petRarity', '', 'ทั้งหมด')}${opt('petRarity', 'L', 'ตำนาน (L)', 'r-L')}${opt('petRarity', 'R', 'หายาก (R)', 'r-R')}</div>
+          <button type="button" class="btn primary block" data-action="modal-close">ตกลง</button>`,
+          'small',
+        );
+  }
+
+  if (m.kind === 'grid') {
+    const used = usedIn(state.sel?.team || state.activeTeam);
+    const groups =
+      d.tab === 'hero'
+        ? RARITY_GROUPS.map(([r, label]) => [label, dockHeroes().filter((h) => h.rarity === r)])
+        : [['ตำนาน (L)', dockPets().filter((p) => p.rarity === 'L')], ['หายาก (R)', dockPets().filter((p) => p.rarity === 'R')]];
+    return wrap(
+      `${d.tab === 'hero' ? 'อัศวินทั้งหมด' : 'สัตว์เลี้ยงทั้งหมด'}${state.sel ? ` · ${dockHint()}` : ''}`,
+      html`<div class="dock-bar in-modal">
+        <button type="button" class="btn icon ${d.rarity || d.type || d.petRarity ? 'on' : ''}" data-action="modal" data-modal="filter" title="กรองประเภท">${icon('filter')}</button>
+        <input class="dock-q" type="search" placeholder="ค้นหาชื่อ (ไทย/อังกฤษ)" value="${d.q}" data-dock-q />
+      </div>
+      <div class="grid-groups">${groups
+        .filter(([, list]) => list.length)
+        .map(([label, list]) => html`<div class="ggroup"><h4>${label} <span class="muted small">${list.length} ตัว</span></h4><div class="ggrid">${list.map((x) => dockCard(x, d.tab, used))}</div></div>`)}</div>`,
+      'wide',
+    );
+  }
+
+  if (m.kind === 'formation') {
+    const team = teamAt(m.team);
+    return wrap(
+      'รูปแบบการจัดทีม (Formation)',
+      html`<div class="fmgrid">${[2, 3, 1, 4].map(
+        (f) => html`<button type="button" class="fmopt ${team.front === f ? 'active' : ''}" data-action="set-formation" data-team="${m.team}" data-f="${f}">
+          ${formationDots(f)}<b>${team.front === f ? '✓ ' : ''}รูปแบบ${FORMATIONS[f]}</b><span class="muted small">หน้า ${f} · หลัง ${5 - f}</span>
+        </button>`,
+      )}</div>
+      <p class="muted small"><span class="blue">โล่น้ำเงิน</span> = แถวหน้า · <span class="red">หมุดแดง</span> = แถวหลัง</p>`,
+      'small',
+    );
+  }
+
+  if (m.kind === 'skills') {
+    const team = teamAt(m.team);
+    const skills = getPath(state.edit, m.skills);
+    const heroes = team.slots.map((n, i) => [n, i]).filter(([n]) => n);
+    return wrap(
+      'ลำดับการใช้สกิล',
+      html`<div class="sk-order">${[...Array(MAX_SKILLS).keys()].map((i) => {
+        const s = skills[i];
+        return s
+          ? html`<span class="sk-chip"><b>${i + 1}</b>${portrait(heroInfo(team.slots[s.slot]).img, 'ico')}${heroInfo(team.slots[s.slot]).base} · ${SKILL_LABEL[s.skill]}<button type="button" data-action="skill-del" data-path="${m.skills}" data-i="${i}" title="ลบ">×</button></span>`
+          : html`<span class="sk-chip empty"><b>${i + 1}</b>—</span>`;
+      })}</div>
+      <p class="muted small">แตะสกิลตามลำดับที่ต้องการใช้ (สูงสุด ${MAX_SKILLS})</p>
+      <div class="sk-heroes">${heroes.map(
+        ([n, i]) => html`<div class="sk-hero">${heroCard(n, { cls: 'mini' })}<div class="sk-btns">${[1, 2, ...(heroInfo(n).awake ? [3] : [])].map(
+          (k) => html`<button type="button" class="btn small" data-action="skill-push" data-path="${m.skills}" data-slot="${i}" data-skill="${k}" ${skills.length >= MAX_SKILLS ? raw('disabled') : ''}>${SKILL_LABEL[k]}</button>`,
+        )}</div></div>`,
+      )}</div>
+      ${heroes.length ? '' : html`<p class="muted center">ใส่อัศวินในทีมก่อน</p>`}
+      <div class="actions"><button type="button" class="btn ghost" data-action="skill-clear" data-path="${m.skills}">ล้าง</button><button type="button" class="btn primary" data-action="modal-close">เสร็จ</button></div>`,
+      'small',
+    );
+  }
+  return '';
 }
 
 // ---------- router ----------
@@ -784,7 +1010,7 @@ function route() {
 function renderNav() {
   const h = location.hash || '#/';
   const { dow, time } = bkkNow();
-  const kind = state.data && schedule()[dow];
+  const kind = SCHEDULE[dow];
   const link = (href, ic, label, active) => html`<a href="${href}" class="${active ? 'active' : ''}">${icon(ic)} ${label}</a>`;
   $nav.innerHTML = fmt(html`
     <div class="clock">
@@ -819,13 +1045,27 @@ function render() {
     loadData().then(render, (e) => e.status !== 423 && toast(errMsg(e), true));
     return;
   }
-  $app.innerHTML = fmt(route()) + (state.picker && state.edit ? fmt(viewPicker()) : '');
-  $app.querySelector('[data-pick-search]')?.focus();
+  // keep scroll positions of the dock strip / grid modal and focus of the search box across re-renders
+  const keep = ['.dock-strip', '.grid-groups'].map((s) => [s, $app.querySelector(s)?.scrollLeft, $app.querySelector(s)?.scrollTop]);
+  const focusQ = document.activeElement?.hasAttribute?.('data-dock-q') ? document.activeElement.selectionStart : null;
+  const page = fmt(route());
+  const dock = state.edit && !/\/c\/[\w-]+\/edit|\/c\/new/.test(location.hash) ? true : state.edit && state.step === 2;
+  $app.innerHTML = page + (dock ? fmt(viewDock()) : '') + (state.modal && state.edit ? fmt(viewModal()) : '');
+  document.body.classList.toggle('has-dock', !!dock);
+  for (const [s, l, t] of keep) {
+    const el = $app.querySelector(s);
+    if (el) (el.scrollLeft = l || 0), (el.scrollTop = t || 0);
+  }
+  const q = [...$app.querySelectorAll('[data-dock-q]')].pop();
+  if (q && (focusQ !== null || state.dock.focus)) q.focus(), q.setSelectionRange(focusQ ?? q.value.length, focusQ ?? q.value.length), (state.dock.focus = false);
 }
 
 addEventListener('hashchange', () => {
   state.edit = null;
-  state.picker = null;
+  state.sel = null;
+  state.activeTeam = null;
+  state.modal = null;
+  state.step = 2;
   if (location.hash !== '#/admin') state.admin = null;
   render();
   scrollTo(0, 0);
@@ -851,28 +1091,124 @@ const actions = {
   },
   lock: () => lock(),
   share: (el) => copyLink(el.dataset.hash),
-  pick(el) {
-    state.picker = { kind: el.dataset.kind, path: el.dataset.path, current: getPath(state.edit, el.dataset.path), rarity: '' };
+  // ----- team board -----
+  slot(el) {
+    const { team: prefix, field } = el.dataset;
+    const i = Number(el.dataset.i);
+    state.activeTeam = prefix;
+    const s = state.sel && !state.sel.auto ? state.sel : null;
+    if (s && s.team === prefix && s.field === field && (field === 'pet' || s.i === i)) {
+      state.sel = null;
+      return render();
+    }
+    if (field === 'slots' && s && s.team === prefix && s.field === 'slots') {
+      const t = teamAt(prefix);
+      if (t.slots[s.i] || t.slots[i]) {
+        swapSlots(prefix, s.i, i);
+        state.sel = null;
+        return render();
+      }
+    }
+    state.sel = { team: prefix, field, i };
+    state.dock.tab = field === 'slots' ? 'hero' : 'pet';
+    state.dock.collapsed = false;
     render();
   },
-  'pick-close'() {
-    state.picker = null;
+  'slot-clear'(el) {
+    const team = teamAt(el.dataset.team);
+    team.slots[Number(el.dataset.i)] = null;
+    state.sel = null;
     render();
   },
-  'pick-rarity'(el) {
-    state.picker.rarity = el.dataset.r;
+  'toggle-awk'(el) {
+    const team = teamAt(el.dataset.team);
+    const i = Number(el.dataset.i);
+    const h = heroInfo(team.slots[i]);
+    team.slots[i] = h.awake ? h.base : `${h.base} awake`;
     render();
   },
-  'pick-set': (el) => setPicked(el.dataset.value),
-  'skill-add'(el) {
-    const team = getPath(state.edit, el.dataset.team);
+  'team-reset'(el) {
+    if (!confirm('ล้างทีมนี้ทั้งหมด?')) return;
+    const team = teamAt(el.dataset.team);
+    Object.assign(team, { ...emptyTeam(), front: team.front });
+    getPath(state.edit, el.dataset.skills)?.splice(0);
+    state.sel = null;
+    render();
+  },
+  'open-formation'(el) {
+    state.activeTeam = el.dataset.team;
+    state.modal = { kind: 'formation', team: el.dataset.team };
+    render();
+  },
+  'open-skills'(el) {
+    state.activeTeam = el.dataset.team;
+    state.modal = { kind: 'skills', team: el.dataset.team, skills: el.dataset.skills };
+    render();
+  },
+  'set-formation'(el) {
+    teamAt(el.dataset.team).front = Number(el.dataset.f);
+    state.modal = null;
+    render();
+  },
+  'skill-push'(el) {
     const skills = getPath(state.edit, el.dataset.path);
-    skills.push({ slot: team.slots.findIndex(Boolean), skill: 1 });
+    if (skills.length < MAX_SKILLS) skills.push({ slot: Number(el.dataset.slot), skill: Number(el.dataset.skill) });
     render();
   },
   'skill-del'(el) {
     getPath(state.edit, el.dataset.path).splice(Number(el.dataset.i), 1);
     render();
+  },
+  'skill-clear'(el) {
+    getPath(state.edit, el.dataset.path).splice(0);
+    render();
+  },
+  // ----- dock -----
+  'dock-pick'(el) {
+    const prefix = state.sel?.team || state.activeTeam;
+    if (!prefix || !teamAt(prefix)) return toast('แตะช่องในทีมก่อน', true);
+    state.activeTeam = prefix;
+    if (el.dataset.kind === 'hero') placeHero(prefix, el.dataset.value);
+    else placePet(prefix, el.dataset.value);
+    if (state.modal?.kind === 'grid') state.modal = null;
+    render();
+  },
+  'dock-tab'(el) {
+    state.dock.tab = el.dataset.tab;
+    render();
+  },
+  'dock-search'() {
+    state.dock.search = !state.dock.search || !!state.dock.q;
+    state.dock.focus = state.dock.search;
+    render();
+  },
+  'dock-collapse'() {
+    state.dock.collapsed = !state.dock.collapsed;
+    render();
+  },
+  modal(el) {
+    state.modal = { kind: el.dataset.modal, back: state.modal?.kind === 'grid' ? 'grid' : null };
+    render();
+  },
+  'modal-close'() {
+    state.modal = state.modal?.back ? { kind: state.modal.back } : null;
+    render();
+  },
+  'set-filter'(el) {
+    state.dock[el.dataset.key] = el.dataset.val;
+    render();
+  },
+  'tag-toggle'(el) {
+    const tags = state.edit.tags;
+    const t = el.dataset.tag;
+    tags.includes(t) ? tags.splice(tags.indexOf(t), 1) : tags.length < 10 && tags.push(t);
+    render();
+  },
+  step(el) {
+    state.step = Number(el.dataset.step);
+    state.sel = null;
+    render();
+    scrollTo(0, 0);
   },
   async 'save-target'(el) {
     const id = el.dataset.id;
@@ -933,21 +1269,7 @@ const actions = {
     toast('บันทึกแล้ว');
     await refresh(`#/p/${isNew ? r.id : id}`);
   },
-  async 'day-cycle'(el) {
-    const prev = schedule();
-    const next = [...prev];
-    const i = Number(el.dataset.i);
-    next[i] = KIND_CYCLE[(KIND_CYCLE.indexOf(next[i]) + 1) % KIND_CYCLE.length];
-    state.data.schedule = next;
-    render();
-    try {
-      await api('PUT', '/schedule', { schedule: next });
-    } catch (e) {
-      if (state.data) state.data.schedule = prev;
-      render();
-      throw e;
-    }
-  },
+
   async 'revoke-all'() {
     if (!confirm('บังคับให้ทุกคน (ยกเว้นคุณ) ออกจากระบบ?')) return;
     await api('POST', '/sessions/revoke-all');
@@ -998,10 +1320,6 @@ const forms = {
     state.admin = null;
     await refresh();
   },
-  'pick-custom'(f) {
-    const name = f.name.value.trim();
-    if (name) setPicked(name.slice(0, 60));
-  },
   async 'add-member'(f) {
     await api('POST', '/members', { discordId: f.discordId.value.trim(), note: f.note.value.trim(), role: f.role.value });
     toast('เพิ่มสมาชิกแล้ว');
@@ -1012,8 +1330,8 @@ const forms = {
 
 document.addEventListener('click', async (ev) => {
   const el = ev.target.closest('[data-action]');
-  // clicks inside the picker modal bubble up to the backdrop; only a direct backdrop click closes it
-  if (!el || (el.classList.contains('modal-bg') && ev.target !== el)) return;
+  // clicks inside a modal bubble up to the backdrop; only a direct backdrop click closes it
+  if (!el || (el.classList.contains('modal-bg') && ev.target !== el) || el.disabled) return;
   ev.preventDefault();
   try {
     await actions[el.dataset.action]?.(el);
@@ -1040,9 +1358,11 @@ document.addEventListener('submit', async (ev) => {
 document.addEventListener('input', (ev) => {
   const el = ev.target;
   if (el.dataset.bind && state.edit) setPath(state.edit, el.dataset.bind, readInput(el));
-  if (el.hasAttribute('data-pick-search')) {
+  if (el.hasAttribute('data-dock-q')) {
+    state.dock.q = el.value;
     const words = el.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    for (const t of $app.querySelectorAll('.pick-grid .tile')) t.hidden = !words.every((w) => t.dataset.search.includes(w));
+    for (const c of $app.querySelectorAll('.dcard')) c.hidden = !words.every((w) => c.dataset.search.includes(w));
+    for (const g of $app.querySelectorAll('.ggroup')) g.hidden = !g.querySelector('.dcard:not([hidden])');
   }
   if (el.dataset.filter) {
     state[el.dataset.filter] = el.value;
@@ -1054,7 +1374,20 @@ document.addEventListener('input', (ev) => {
 });
 
 document.addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape' && state.picker) actions['pick-close']();
+  if (ev.key === 'Enter' && ev.target.hasAttribute?.('data-tag-input')) {
+    ev.preventDefault();
+    const t = ev.target.value.trim().slice(0, 20);
+    if (t && state.edit && !state.edit.tags.includes(t) && state.edit.tags.length < 10) state.edit.tags.push(t);
+    return render();
+  }
+  // role="button" board slots: Enter / Space activate them
+  if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches?.('[role="button"][data-action]')) {
+    ev.preventDefault();
+    return ev.target.click();
+  }
+  if (ev.key !== 'Escape' || !state.edit) return;
+  if (state.modal) actions['modal-close']();
+  else if (state.sel) (state.sel = null), render();
 });
 
 document.addEventListener('change', async (ev) => {
