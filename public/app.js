@@ -38,7 +38,27 @@ const IDLE_LOCK_MS = 30 * 60e3;
 const NEXT_KEY = 'egg2k:next';
 
 // Unlock token is kept in memory only: reloading / closing the tab always asks for the password again.
-const state = { me: null, passwordSet: false, token: null, exp: 0, data: null, edit: null, admin: null, lastActive: Date.now(), q: '', tag: '' };
+const state = { me: null, passwordSet: false, token: null, exp: 0, data: null, edit: null, admin: null, picker: null, lastActive: Date.now(), q: '', tag: '' };
+
+// ---------- game assets (self-hosted images, see scripts/fetch-assets.mjs) ----------
+const AS = { hero: new Map(), pet: new Map(), heroes: [], pets: [], sets: {}, rings: {} };
+const AWAKE_RE = /^(.*?)(\s+awake(?:\s+epic)?)?$/i;
+
+function buildAssets(a) {
+  Object.assign(AS, { heroes: a.heroes, pets: a.pets, sets: a.sets, rings: a.rings });
+  for (const h of a.heroes) for (const n of h.aliases) AS.hero.set(n, h);
+  for (const p of a.pets) for (const n of p.aliases) AS.pet.set(n, p);
+}
+
+function heroInfo(name) {
+  const [, base, awk] = AWAKE_RE.exec(name || '');
+  const h = AS.hero.get(base);
+  return { base, awake: !!awk, img: h ? (awk && h.awk) || h.img : null };
+}
+
+const portrait = (img, cls = '') => (img ? html`<img class="${cls}" src="${img}" alt="" loading="lazy" />` : '');
+const petChip = (name) => html`<span class="chip pet">${portrait(AS.pet.get(name)?.img, 'ico')}${name}</span>`;
+const iconChip = (img, label) => html`<span class="chip">${portrait(img, 'ico')}${label}</span>`;
 
 // ---------- api ----------
 class ApiError extends Error {
@@ -106,6 +126,10 @@ async function boot() {
     history.replaceState(null, '', '/' + location.hash);
     toast({ denied: 'บัญชี Discord นี้ยังไม่ได้รับสิทธิ์ ติดต่อแอดมินกิลด์', state: 'เข้าสู่ระบบไม่สำเร็จ ลองใหม่อีกครั้ง' }[err] || 'เข้าสู่ระบบไม่สำเร็จ', true);
   }
+  fetch('/assets.json')
+    .then((r) => r.json())
+    .then((a) => (buildAssets(a), state.token && render()))
+    .catch(() => {});
   try {
     const r = await api('GET', '/me');
     state.me = r.user;
@@ -145,8 +169,7 @@ function allNames() {
   const tags = new Set();
   const addTeam = (t) => {
     heroesOf(t).forEach((h) => heroes.add(h));
-    (t?.extras || []).filter(Boolean).forEach((h) => heroes.add(h));
-    if (t?.pet) pets.add(t.pet);
+    [t?.pet, ...(t?.extras || [])].filter(Boolean).forEach((p) => pets.add(p));
   };
   const addNotes = (ns) => (ns || []).forEach((n) => (n.sets.forEach((s) => sets.add(s)), n.rings.forEach((s) => rings.add(s))));
   for (const t of state.data?.targets || []) {
@@ -155,6 +178,9 @@ function allNames() {
     t.counters.forEach((c) => (addTeam(c.team), addNotes(c.heroNotes)));
   }
   for (const p of state.data?.plans || []) for (const s of p.data.slots || []) for (const o of s.options || []) addTeam(o.team), addNotes(o.heroNotes);
+  AS.heroes.forEach((h) => heroes.add(h.name));
+  Object.keys(AS.sets).forEach((s) => sets.add(s));
+  Object.keys(AS.rings).forEach((s) => rings.add(s));
   const sort = (s) => [...s].sort((a, b) => a.localeCompare(b, 'th'));
   return { heroes: sort(heroes), pets: sort(pets), sets: sort(sets), rings: sort(rings), tags: sort(tags) };
 }
@@ -178,7 +204,12 @@ async function copyLink(hash) {
 // ---------- team rendering ----------
 function teamView(team, skills = team?.skills || []) {
   const f = team?.front || 2;
-  const slot = (i) => html`<div class="slot ${team.slots[i] ? '' : 'empty'}">${team.slots[i] || '·'}</div>`;
+  const slot = (i) => {
+    const n = team.slots[i];
+    if (!n) return html`<div class="slot empty">·</div>`;
+    const h = heroInfo(n);
+    return html`<div class="slot ${h.img ? 'has-img' : ''}" title="${n}">${portrait(h.img)}${h.awake ? html`<span class="awk">AWK</span>` : ''}<span class="nm">${h.base}</span></div>`;
+  };
   const extras = (team.extras || []).filter(Boolean);
   return html`<div class="team">
     <div class="formation">รูปแบบ${FORMATIONS[f] || ''} <span class="muted">หน้า ${f} / หลัง ${5 - f}</span>${team.speed ? html` · <span class="speed">สปีด ${team.speed}</span>` : ''}</div>
@@ -187,8 +218,8 @@ function teamView(team, skills = team?.skills || []) {
       <div class="row"><span class="row-label">หลัง</span>${[...Array(5 - f).keys()].map((i) => slot(i + f))}</div>
     </div>
     <div class="team-meta">
-      ${team.pet ? html`<span class="chip pet">🐾 ${team.pet}</span>` : ''}
-      ${extras.length ? html`<span class="muted">สำรอง:</span> ${extras.map((x) => html`<span class="chip">${x}</span>`)}` : ''}
+      ${team.pet ? petChip(team.pet) : ''}
+      ${extras.length ? html`<span class="muted">สำรอง:</span> ${extras.map(petChip)}` : ''}
     </div>
     ${skills.length ? html`<div class="skills">${skills.map((s, i) => html`<span class="skill"><b>${i + 1}</b> ${team.slots[s.slot] || `ช่อง ${s.slot + 1}`} สกิล${s.skill}</span>`)}</div>` : ''}
   </div>`;
@@ -199,9 +230,9 @@ function heroNotesView(notes) {
   if (!list.length) return '';
   return html`<div class="hero-notes">${list.map(
     (n) => html`<div class="hero-note">
-      <div class="hn-name">${n.hero}</div>
-      ${n.sets.length ? html`<div><span class="muted">เซ็ต:</span> ${n.sets.join(', ')}</div>` : ''}
-      ${n.rings.length ? html`<div><span class="muted">แหวน:</span> ${n.rings.join(', ')}</div>` : ''}
+      <div class="hn-name">${portrait(heroInfo(n.hero).img, 'ico lg')}${n.hero}</div>
+      ${n.sets.length ? html`<div class="icon-row"><span class="muted">เซ็ต:</span> ${n.sets.map((s) => iconChip(AS.sets[s], s))}</div>` : ''}
+      ${n.rings.length ? html`<div class="icon-row"><span class="muted">แหวน:</span> ${n.rings.map((s) => iconChip(AS.rings[s], s))}</div>` : ''}
       ${Object.keys(n.stats).length ? html`<div class="stats">${Object.entries(n.stats).map(([k, v]) => html`<span class="stat">${STAT_LABEL[k] || k} <b>${v}</b></span>`)}</div>` : ''}
       ${n.text ? html`<div class="pre">${n.text}</div>` : ''}
     </div>`,
@@ -211,8 +242,13 @@ function heroNotesView(notes) {
 // ---------- team editor (bound to state.edit via data-bind paths) ----------
 function teamEditor(prefix, team, skills, skillsPath, notes, notesPath) {
   const f = team.front || 2;
-  const slotInput = (i) =>
-    html`<input class="slot-input" list="dl-heroes" placeholder="ช่อง ${i + 1}" value="${team.slots[i] || ''}" data-bind="${prefix}.slots.${i}" data-rerender />`;
+  const pickBtn = (kind, path, value, placeholder) => {
+    const img = kind === 'hero' ? heroInfo(value).img : AS.pet.get(value)?.img;
+    return html`<button type="button" class="slot pick ${value ? 'has-img' : 'empty'}" data-action="pick" data-kind="${kind}" data-path="${path}">
+      ${value ? html`${portrait(img)}${kind === 'hero' && heroInfo(value).awake ? html`<span class="awk">AWK</span>` : ''}<span class="nm">${kind === 'hero' ? heroInfo(value).base : value}</span>` : html`<span class="nm">+ ${placeholder}</span>`}
+    </button>`;
+  };
+  const slotInput = (i) => pickBtn('hero', `${prefix}.slots.${i}`, team.slots[i], `ช่อง ${i + 1}`);
   return html`<div class="team-editor">
     <div class="grid2">
       <label>รูปแบบ
@@ -227,10 +263,8 @@ function teamEditor(prefix, team, skills, skillsPath, notes, notesPath) {
       <div class="row"><span class="row-label">หลัง</span>${[...Array(5 - f).keys()].map((i) => slotInput(i + f))}</div>
     </div>
     <div class="grid2">
-      <label>สัตว์เลี้ยง <input list="dl-pets" value="${team.pet || ''}" data-bind="${prefix}.pet" /></label>
-      <div><span class="lbl">สำรอง</span><div class="extras">${[0, 1, 2, 3].map(
-        (i) => html`<input list="dl-heroes" value="${team.extras[i] || ''}" data-bind="${prefix}.extras.${i}" />`,
-      )}</div></div>
+      <div><span class="lbl">สัตว์เลี้ยง</span><div class="pet-pick">${pickBtn('pet', `${prefix}.pet`, team.pet, 'สัตว์เลี้ยง')}</div></div>
+      <div><span class="lbl">สัตว์เลี้ยงสำรอง</span><div class="extras">${[0, 1, 2, 3].map((i) => pickBtn('pet', `${prefix}.extras.${i}`, team.extras[i], 'สำรอง'))}</div></div>
     </div>
     <div class="skill-editor">
       <span class="lbl">ลำดับสกิล</span>
@@ -248,7 +282,7 @@ function teamEditor(prefix, team, skills, skillsPath, notes, notesPath) {
     ${notes
       ? html`<div class="hn-editor">${notes.map(
           (n, i) => html`<fieldset>
-            <legend>${n.hero}</legend>
+            <legend>${portrait(heroInfo(n.hero).img, 'ico lg')}${n.hero}</legend>
             <div class="grid2">
               <label>เซ็ต (คั่นด้วย ,) <input list="dl-sets" value="${n.sets.join(', ')}" data-bind="${notesPath}.${i}.sets" data-type="list" /></label>
               <label>แหวน (คั่นด้วย ,) <input list="dl-rings" value="${n.rings.join(', ')}" data-bind="${notesPath}.${i}.rings" data-type="list" /></label>
@@ -581,6 +615,47 @@ function viewAdmin() {
     </div>`;
 }
 
+function viewPicker() {
+  const p = state.picker;
+  const list = p.kind === 'hero' ? AS.heroes : AS.pets;
+  const rarities = [...new Set(list.map((x) => x.rarity))];
+  const tiles = [];
+  for (const x of list) {
+    if (p.rarity && x.rarity !== p.rarity) continue;
+    const search = x.aliases.join(' ').toLowerCase();
+    tiles.push({ value: x.name, img: x.img, label: x.name, search });
+    if (p.kind === 'hero' && x.awk) tiles.push({ value: `${x.name} awake`, img: x.awk, label: x.name, awk: true, search: `${search} awake awk` });
+  }
+  return html`<div class="modal-bg" data-action="pick-close">
+    <div class="modal">
+      <div class="toolbar">
+        <h3>เลือก${p.kind === 'hero' ? 'ฮีโร่' : 'สัตว์เลี้ยง'}</h3>
+        <input class="search" type="search" placeholder="ค้นหาชื่อ (ไทย/อังกฤษ)" data-pick-search />
+        <button class="btn small ghost" data-action="pick-close">✕</button>
+      </div>
+      <div class="tabs">${['', ...rarities].map(
+        (r) => html`<button class="btn small ${p.rarity === r ? 'active' : ''}" data-action="pick-rarity" data-r="${r}">${r || 'ทั้งหมด'}</button>`,
+      )}</div>
+      ${list.length ? '' : html`<p class="muted">ยังไม่มีไฟล์รูป — รัน <code>npm run assets</code></p>`}
+      <div class="pick-grid">${tiles.map(
+        (t) => html`<button type="button" class="tile ${t.value === p.current ? 'selected' : ''}" data-action="pick-set" data-value="${t.value}" data-search="${t.search}" title="${t.value}">
+          ${portrait(t.img)}${t.awk ? html`<span class="awk">AWK</span>` : ''}<span class="nm">${t.label}</span>
+        </button>`,
+      )}</div>
+      <div class="pick-foot">
+        <button class="btn small danger" data-action="pick-set" data-value="">ล้างช่อง</button>
+        <form data-form="pick-custom" class="inline"><input name="name" placeholder="ไม่มีในรายการ? พิมพ์ชื่อเอง" /><button class="btn small">ใช้ชื่อนี้</button></form>
+      </div>
+    </div>
+  </div>`;
+}
+
+function setPicked(value) {
+  setPath(state.edit, state.picker.path, value || null);
+  state.picker = null;
+  render();
+}
+
 // ---------- router ----------
 function route() {
   const h = location.hash.replace(/^#/, '') || '/';
@@ -620,11 +695,13 @@ function render() {
     loadData().then(render, (e) => e.status !== 423 && toast(errMsg(e), true));
     return;
   }
-  $app.innerHTML = fmt(route());
+  $app.innerHTML = fmt(route()) + (state.picker && state.edit ? fmt(viewPicker()) : '');
+  $app.querySelector('[data-pick-search]')?.focus();
 }
 
 addEventListener('hashchange', () => {
   state.edit = null;
+  state.picker = null;
   if (location.hash !== '#/admin') state.admin = null;
   render();
   scrollTo(0, 0);
@@ -650,6 +727,19 @@ const actions = {
   },
   lock: () => lock(),
   share: (el) => copyLink(el.dataset.hash),
+  pick(el) {
+    state.picker = { kind: el.dataset.kind, path: el.dataset.path, current: getPath(state.edit, el.dataset.path), rarity: '' };
+    render();
+  },
+  'pick-close'() {
+    state.picker = null;
+    render();
+  },
+  'pick-rarity'(el) {
+    state.picker.rarity = el.dataset.r;
+    render();
+  },
+  'pick-set': (el) => setPicked(el.dataset.value),
   'skill-add'(el) {
     const team = getPath(state.edit, el.dataset.team);
     const skills = getPath(state.edit, el.dataset.path);
@@ -768,6 +858,10 @@ const forms = {
     state.admin = null;
     await refresh();
   },
+  'pick-custom'(f) {
+    const name = f.name.value.trim();
+    if (name) setPicked(name.slice(0, 60));
+  },
   async 'add-member'(f) {
     await api('POST', '/members', { discordId: f.discordId.value.trim(), note: f.note.value.trim(), role: f.role.value });
     toast('เพิ่มสมาชิกแล้ว');
@@ -778,7 +872,8 @@ const forms = {
 
 document.addEventListener('click', async (ev) => {
   const el = ev.target.closest('[data-action]');
-  if (!el) return;
+  // clicks inside the picker modal bubble up to the backdrop; only a direct backdrop click closes it
+  if (!el || (el.classList.contains('modal-bg') && ev.target !== el)) return;
   ev.preventDefault();
   try {
     await actions[el.dataset.action]?.(el);
@@ -805,6 +900,10 @@ document.addEventListener('submit', async (ev) => {
 document.addEventListener('input', (ev) => {
   const el = ev.target;
   if (el.dataset.bind && state.edit) setPath(state.edit, el.dataset.bind, readInput(el));
+  if (el.hasAttribute('data-pick-search')) {
+    const words = el.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    for (const t of $app.querySelectorAll('.pick-grid .tile')) t.hidden = !words.every((w) => t.dataset.search.includes(w));
+  }
   if (el.dataset.filter) {
     state[el.dataset.filter] = el.value;
     const pos = el.selectionStart;
@@ -812,6 +911,10 @@ document.addEventListener('input', (ev) => {
     const again = $app.querySelector(`[data-filter="${el.dataset.filter}"]`);
     if (again?.tagName === 'INPUT') again.focus(), again.setSelectionRange(pos, pos);
   }
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape' && state.picker) actions['pick-close']();
 });
 
 document.addEventListener('change', async (ev) => {

@@ -55,6 +55,14 @@ npm run dev            # http://127.0.0.1:8788
 ```
 `DEV_LOGIN=true` เปิด `/auth/dev-login` (login เป็นแอดมินโดยไม่ผ่าน Discord) ใช้ได้เฉพาะ localhost — **ห้ามตั้งใน production**
 
+## รูปฮีโร่ / สัตว์เลี้ยง / เซ็ต / แหวน
+รูปทั้งหมดเก็บในเว็บเราเอง (`public/img/`, `public/assets.json`) ดาวน์โหลดและย่อขนาดจาก 7K Atlas
+```bash
+npm run assets            # ดึงฮีโร่/สัตว์เลี้ยงใหม่ (ไฟล์ที่มีแล้วจะข้าม)
+npm run assets -- --force # โหลดใหม่ทั้งหมด
+```
+ชื่อที่ไม่ตรงกับ 7K Atlas (เช่น `เซนอิทสึ`, `รีเซล`) ให้เพิ่มใน `HERO_ALIASES` / `PET_ALIASES` และไอคอนแหวนใน `RINGS` ที่ `scripts/fetch-assets.mjs`
+
 ## โครงสร้าง
 ```
 public/            หน้าเว็บ (index.html, app.js, style.css, _headers)
