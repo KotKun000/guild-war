@@ -34,6 +34,44 @@ const STATS = [
 ];
 const STAT_LABEL = Object.fromEntries(STATS);
 const ROLE_LABEL = { viewer: 'ดูอย่างเดียว', editor: 'แก้ไขได้', admin: 'แอดมิน' };
+const DAYS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+const DAY_SHORT = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'];
+const DAY_KIND = {
+  attack: { short: 'ตี', full: 'วันตี', info: 'วันนี้วันตี — เลือกแผนบุก แล้วเข้าตีบ้านศัตรูตามที่วางไว้' },
+  defense: { short: 'จัดบ้าน', full: 'วันจัดบ้าน', info: 'วันนี้วันจัดบ้าน — วางทีมป้องกันตามแผนกันให้เรียบร้อย' },
+  rest: { short: 'พัก', full: 'วันพัก', info: 'วันนี้วันพัก — ไม่มีวอร์ ใช้เวลาเตรียมทีมและเก็บของ' },
+};
+const KIND_CYCLE = ['attack', 'defense', 'rest'];
+const DEFAULT_SCHEDULE = ['attack', 'defense', 'attack', 'rest', 'defense', 'attack', 'defense'];
+
+// Thai time (UTC+7, no DST); dow 0 = Monday
+function bkkNow() {
+  const d = new Date(Date.now() + 7 * 3600e3);
+  return { dow: (d.getUTCDay() + 6) % 7, time: d.toISOString().slice(11, 19) };
+}
+
+const ICONS = {
+  star: '<path class="f" d="M12 2l2.6 7.4L22 12l-7.4 2.6L12 22l-2.6-7.4L2 12l7.4-2.6z"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  swords: '<path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M14.5 6.5 18 3h3v3l-3.5 3.5M5 14l4 4M7 17l-3 3M3 19l2 2"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  settings: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  back: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
+  users: '<circle cx="9" cy="7" r="4"/><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2M16 3.1a4 4 0 0 1 0 7.8M21 21v-2a4 4 0 0 0-3-3.9"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+  log: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+};
+const icon = (name, cls = '') =>
+  raw(`<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`);
 const IDLE_LOCK_MS = 30 * 60e3;
 const NEXT_KEY = 'egg2k:next';
 
@@ -212,7 +250,7 @@ function teamView(team, skills = team?.skills || []) {
   };
   const extras = (team.extras || []).filter(Boolean);
   return html`<div class="team">
-    <div class="formation">รูปแบบ${FORMATIONS[f] || ''} <span class="muted">หน้า ${f} / หลัง ${5 - f}</span>${team.speed ? html` · <span class="speed">สปีด ${team.speed}</span>` : ''}</div>
+    <div class="formation"><b>รูปแบบ${FORMATIONS[f] || ''}</b> หน้า ${f} / หลัง ${5 - f}${team.speed ? html` · <span class="speed">สปีด ${team.speed}</span>` : ''}</div>
     <div class="rows">
       <div class="row"><span class="row-label">หน้า</span>${[...Array(f).keys()].map(slot)}</div>
       <div class="row"><span class="row-label">หลัง</span>${[...Array(5 - f).keys()].map((i) => slot(i + f))}</div>
@@ -233,7 +271,10 @@ function heroNotesView(notes) {
       <div class="hn-name">${portrait(heroInfo(n.hero).img, 'ico lg')}${n.hero}</div>
       ${n.sets.length ? html`<div class="icon-row"><span class="muted">เซ็ต:</span> ${n.sets.map((s) => iconChip(AS.sets[s], s))}</div>` : ''}
       ${n.rings.length ? html`<div class="icon-row"><span class="muted">แหวน:</span> ${n.rings.map((s) => iconChip(AS.rings[s], s))}</div>` : ''}
-      ${Object.keys(n.stats).length ? html`<div class="stats">${Object.entries(n.stats).map(([k, v]) => html`<span class="stat">${STAT_LABEL[k] || k} <b>${v}</b></span>`)}</div>` : ''}
+      ${(() => {
+        const st = Object.entries(n.stats).filter(([k, v]) => STAT_LABEL[k] && typeof v === 'number' && v !== 0);
+        return st.length ? html`<div class="stats">${st.map(([k, v]) => html`<span class="stat">${STAT_LABEL[k]} <b>${v}</b></span>`)}</div>` : '';
+      })()}
       ${n.text ? html`<div class="pre">${n.text}</div>` : ''}
     </div>`,
   )}</div>`;
@@ -331,18 +372,69 @@ function readInput(el) {
 
 // ---------- views ----------
 function viewLogin() {
-  return html`<section class="hero-card">
+  return html`<section class="hero-card frame">
     <div class="kicker">GUILD WAR · SEVEN KNIGHTS RE:BIRTH</div>
     <h1>EGG2K<br /><span class="gold">MEMBERS ONLY.</span></h1>
     <p class="muted">เข้าสู่ระบบด้วย Discord (เฉพาะสมาชิกกิลด์) แล้วใส่รหัสกิลด์ทุกครั้งที่เปิดเว็บ</p>
-    <button class="btn discord" data-action="login">Login ด้วย Discord</button>
+    <button class="btn discord" data-action="login">เข้าสู่ระบบด้วย Discord</button>
   </section>`;
 }
+
+const schedule = () => state.data?.schedule || DEFAULT_SCHEDULE;
+
+function hqCard() {
+  const d = state.data;
+  return html`<section class="panel frame hq">
+    <div>
+      <div class="kicker">GUILD HEADQUARTERS</div>
+      <h1>EGG2K</h1>
+      <div class="muted small">${d.plans.length} แผนสงคราม · ${d.targets.length} บ้านศัตรู</div>
+    </div>
+    <div class="actions">
+      <button class="btn" data-action="share" data-hash="${location.hash || '#/'}">${icon('link')} แชร์ลิงก์หน้านี้</button>
+      ${can('admin') ? html`<a class="btn" href="#/admin">${icon('settings')} ตั้งค่ากิลด์</a>` : ''}
+    </div>
+  </section>`;
+}
+
+function weekCard() {
+  const s = schedule();
+  const { dow } = bkkNow();
+  const kind = s[dow];
+  const editable = can('editor');
+  return html`<section class="panel frame week">
+    <div class="week-head">
+      <h3>${icon('calendar')} วัน${DAYS[dow]} <span class="pill ${kind}">${DAY_KIND[kind].full}</span></h3>
+      <div class="days">${s.map((k, i) => {
+        const inner = html`<b>${DAY_SHORT[i]}</b><span>${DAY_KIND[k].short}</span>`;
+        const cls = `day ${k} ${i === dow ? 'today' : ''}`;
+        return editable
+          ? html`<button type="button" class="${cls}" data-action="day-cycle" data-i="${i}" title="วัน${DAYS[i]}: ${DAY_KIND[k].full} — คลิกเพื่อเปลี่ยน">${inner}</button>`
+          : html`<div class="${cls}" title="วัน${DAYS[i]}: ${DAY_KIND[k].full}">${inner}</div>`;
+      })}</div>
+    </div>
+    <div class="week-info">${DAY_KIND[kind].info}</div>
+    ${editable ? html`<div class="legend">คลิกที่วันเพื่อสลับ ตี → จัดบ้าน → พัก (บันทึกอัตโนมัติ)</div>` : ''}
+  </section>`;
+}
+
+function homeTabs(active) {
+  const d = state.data;
+  return html`<nav class="seg">
+    <a href="#/" class="${active === 'targets' ? 'active' : ''}">${icon('swords')} บ้านศัตรู <span class="n">${d.targets.length}</span></a>
+    <a href="#/plans" class="${active === 'plans' ? 'active' : ''}">${icon('clipboard')} แผนสงคราม <span class="n">${d.plans.length}</span></a>
+  </nav>`;
+}
+
+const homeTop = (active) => html`${hqCard()}${weekCard()}${homeTabs(active)}`;
+
+const emptyState = (ic, title, text) => html`<div class="panel frame empty">${icon(ic)}<div><b>${title}</b><span class="muted small">${text}</span></div></div>`;
 
 function viewUnlock() {
   if (!state.passwordSet) {
     return can('admin')
-      ? html`<section class="hero-card narrow">
+      ? html`<section class="hero-card narrow frame">
+          <div class="lock-icon">${icon('key')}</div>
           <h2>ตั้งรหัสกิลด์ครั้งแรก</h2>
           <p class="muted">สมาชิกทุกคนต้องใช้รหัสนี้ทุกครั้งที่เปิดเว็บ (อย่างน้อย 8 ตัวอักษร)</p>
           <form data-form="setup">
@@ -351,11 +443,12 @@ function viewUnlock() {
             <button class="btn primary">บันทึกรหัส</button>
           </form>
         </section>`
-      : html`<section class="hero-card narrow"><h2>ยังไม่ได้ตั้งรหัสกิลด์</h2><p class="muted">รอแอดมินตั้งรหัสก่อนใช้งาน</p></section>`;
+      : html`<section class="hero-card narrow frame"><div class="lock-icon">${icon('lock')}</div><h2>ยังไม่ได้ตั้งรหัสกิลด์</h2><p class="muted">รอแอดมินตั้งรหัสก่อนใช้งาน</p></section>`;
   }
-  return html`<section class="hero-card narrow">
+  return html`<section class="hero-card narrow frame">
+    <div class="lock-icon">${icon('lock')}</div>
     <div class="who">${state.me.avatar ? html`<img src="${state.me.avatar}" alt="" />` : ''} ${state.me.name}</div>
-    <h2>🔒 ใส่รหัสกิลด์</h2>
+    <h2>ใส่รหัสกิลด์</h2>
     <form data-form="unlock">
       <input type="password" name="password" placeholder="รหัสกิลด์" autocomplete="current-password" required autofocus />
       <button class="btn primary">ปลดล็อค</button>
@@ -369,7 +462,7 @@ function targetCard(t) {
     ${teamView(t.team)}
     <div class="card-foot">
       ${t.tags.map((x) => html`<span class="tag">${x}</span>`)}
-      <span class="count">${t.counters.length} ทีมแก้</span>
+      <span class="count">${icon('shield')} ${t.counters.length} ทีมแก้</span>
     </div>
   </a>`;
 }
@@ -383,15 +476,21 @@ function viewTargets() {
     const hay = [...heroesOf(t.team), t.team.pet, ...t.tags, t.note].join(' ').toLowerCase();
     return q.split(/\s+/).every((w) => hay.includes(w));
   });
-  return html`<div class="toolbar">
-      <h2>ทีมศัตรู <span class="muted">(${list.length})</span></h2>
+  return html`${homeTop('targets')}
+    <div class="section-head attack">
+      <h2>${icon('swords')} บ้านศัตรู <span class="n">${list.length} ทีม</span></h2>
+      ${can('editor') ? html`<a class="btn primary" href="#/new">${icon('plus')} เพิ่มบ้านศัตรู</a>` : ''}
+    </div>
+    <div class="filters">
       <input class="search" type="search" placeholder="ค้นหาฮีโร่ / สัตว์เลี้ยง / แท็ก" value="${state.q}" data-filter="q" list="dl-heroes" />
       <select data-filter="tag"><option value="">ทุกแท็ก</option>${names.tags.map((x) => html`<option ${state.tag === x ? raw('selected') : ''}>${x}</option>`)}</select>
-      ${can('editor') ? html`<a class="btn primary" href="#/new">+ เพิ่มทีมศัตรู</a>` : ''}
     </div>
     ${datalists()}
-    <div class="cards">${list.map(targetCard)}</div>
-    ${list.length ? '' : html`<p class="center muted">ไม่พบทีม</p>`}`;
+    ${list.length
+      ? html`<div class="cards">${list.map(targetCard)}</div>`
+      : state.data.targets.length
+        ? emptyState('search', 'ไม่พบทีมที่ค้นหา', 'ลองค้นหาด้วยชื่ออื่น หรือล้างตัวกรอง')
+        : emptyState('swords', 'ยังไม่มีบ้านศัตรู', 'กด "เพิ่มบ้านศัตรู" เพื่อจดทีมป้องกันของกิลด์คู่แข่ง แล้วเพิ่มทีมแก้ให้สมาชิก')}`;
 }
 
 function viewTarget(id) {
@@ -399,33 +498,33 @@ function viewTarget(id) {
   if (!t) return html`<p class="center muted">ไม่พบทีมนี้ (อาจถูกลบไปแล้ว)</p>`;
   const by = (uid) => state.data.names[uid] || '';
   return html`<div class="toolbar">
-      <a class="btn ghost" href="#/">← กลับ</a>
-      <h2>ทีมศัตรู</h2>
-      <button class="btn" data-action="share" data-hash="#/t/${t.id}">🔗 แชร์ลิงก์</button>
-      ${can('editor') ? html`<a class="btn" href="#/t/${t.id}/edit">แก้ไข</a><button class="btn danger" data-action="del-target" data-id="${t.id}">ลบ</button>` : ''}
+      <a class="btn ghost" href="#/">${icon('back')} กลับ</a>
+      <h2>บ้านศัตรู</h2>
+      <button class="btn" data-action="share" data-hash="#/t/${t.id}">${icon('link')} แชร์ลิงก์</button>
+      ${can('editor') ? html`<a class="btn" href="#/t/${t.id}/edit">${icon('edit')} แก้ไข</a><button class="btn danger" data-action="del-target" data-id="${t.id}">${icon('trash')} ลบ</button>` : ''}
     </div>
-    <div class="panel enemy">
+    <div class="panel enemy frame">
       ${teamView(t.team)}
       ${t.tags.length ? html`<div>${t.tags.map((x) => html`<span class="tag">${x}</span>`)}</div>` : ''}
       ${t.note ? html`<div class="pre note">${t.note}</div>` : ''}
       <div class="muted small">อัปเดต ${fmtDate(t.updatedAt)}</div>
     </div>
-    <div class="toolbar">
-      <h3>ทีมแก้ (${t.counters.length})</h3>
-      ${can('editor') ? html`<a class="btn primary" href="#/t/${t.id}/c/new">+ เพิ่มทีมแก้</a>` : ''}
+    <div class="section-head defense">
+      <h2>${icon('shield')} ทีมแก้ <span class="n">${t.counters.length} ทีม</span></h2>
+      ${can('editor') ? html`<a class="btn primary" href="#/t/${t.id}/c/new">${icon('plus')} เพิ่มทีมแก้</a>` : ''}
     </div>
     <div class="counters">${t.counters.map(
       (c, i) => html`<div class="panel counter">
         <div class="counter-head"><b>ทีมแก้ #${i + 1}</b>
           <span class="muted small">${by(c.createdBy)} · ${fmtDate(c.updatedAt)}</span>
-          ${can('editor') ? html`<span class="spacer"></span><a class="btn small" href="#/t/${t.id}/c/${c.id}/edit">แก้ไข</a><button class="btn small danger" data-action="del-counter" data-id="${c.id}">ลบ</button>` : ''}
+          ${can('editor') ? html`<span class="spacer"></span><a class="btn small" href="#/t/${t.id}/c/${c.id}/edit">${icon('edit')} แก้ไข</a><button class="btn small danger" data-action="del-counter" data-id="${c.id}">${icon('trash')}</button>` : ''}
         </div>
         ${teamView(c.team, c.skills)}
         ${c.note ? html`<div class="pre note">${c.note}</div>` : ''}
         ${heroNotesView(c.heroNotes)}
       </div>`,
     )}</div>
-    ${t.counters.length ? '' : html`<p class="center muted">ยังไม่มีทีมแก้</p>`}`;
+    ${t.counters.length ? '' : emptyState('shield', 'ยังไม่มีทีมแก้', 'กด "เพิ่มทีมแก้" เพื่อบอกสมาชิกว่าบ้านนี้ควรใช้ทีมไหนตี')}`;
 }
 
 function viewTargetEdit(id) {
@@ -437,7 +536,7 @@ function viewTargetEdit(id) {
   }
   const e = state.edit;
   syncTeam(e.team, e.skills);
-  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id === 'new' ? '#/' : `#/t/${id}`}">← ยกเลิก</a><h2>${id === 'new' ? 'เพิ่มทีมศัตรู' : 'แก้ไขทีมศัตรู'}</h2></div>
+  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id === 'new' ? '#/' : `#/t/${id}`}">${icon('back')} ยกเลิก</a><h2>${id === 'new' ? 'เพิ่มบ้านศัตรู' : 'แก้ไขบ้านศัตรู'}</h2></div>
     <div class="panel">
       ${teamEditor('team', e.team, e.skills, 'skills')}
       <label>แท็ก (คั่นด้วย ,) <input list="dl-tags" value="${e.tags.join(', ')}" data-bind="tags" data-type="list" /></label>
@@ -456,8 +555,8 @@ function viewCounterEdit(tid, cid) {
   }
   const e = state.edit;
   syncTeam(e.team, e.skills, e.heroNotes);
-  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="#/t/${tid}">← ยกเลิก</a><h2>${cid === 'new' ? 'เพิ่มทีมแก้' : 'แก้ไขทีมแก้'}</h2></div>
-    <div class="panel enemy compact"><div class="muted small">ทีมศัตรู</div>${teamView(t.team)}</div>
+  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="#/t/${tid}">${icon('back')} ยกเลิก</a><h2>${cid === 'new' ? 'เพิ่มทีมแก้' : 'แก้ไขทีมแก้'}</h2></div>
+    <div class="panel enemy compact"><div class="muted small">บ้านศัตรู</div>${teamView(t.team)}</div>
     <div class="panel">
       ${teamEditor('team', e.team, e.skills, 'skills', e.heroNotes, 'heroNotes')}
       <label>โน้ตทีม <textarea rows="3" data-bind="note">${e.note}</textarea></label>
@@ -466,30 +565,38 @@ function viewCounterEdit(tid, cid) {
 }
 
 function viewPlans() {
-  return html`<div class="toolbar"><h2>แผนวอร์ <span class="muted">(${state.data.plans.length})</span></h2>
-      ${can('editor') ? html`<a class="btn primary" href="#/p/new/edit">+ สร้างแผน</a>` : ''}</div>
-    <div class="list">${state.data.plans.map(
-      (p) => html`<a class="list-item" href="#/p/${p.id}">
-        <b>${p.title}</b>
-        <span class="tag">${p.data.kind === 'attack' ? 'บุก' : 'ป้องกัน'}</span>
-        <span class="muted small">${(p.data.slots || []).length} ไม้ · ${fmtDate(p.updatedAt)}</span>
-      </a>`,
-    )}</div>
-    ${state.data.plans.length ? '' : html`<p class="center muted">ยังไม่มีแผน</p>`}`;
+  const section = (kind, title, ic, text) => {
+    const list = state.data.plans.filter((p) => (p.data.kind === 'attack' ? 'attack' : 'defense') === kind);
+    return html`<div class="section-head ${kind}">
+        <h2>${icon(ic)} ${title} <span class="n">${list.length} แผน</span></h2>
+        ${can('editor') ? html`<a class="btn primary" href="#/p/new-${kind}/edit">${icon('plus')} สร้าง${title}</a>` : ''}
+      </div>
+      ${list.length
+        ? html`<div class="list">${list.map(
+            (p) => html`<a class="list-item" href="#/p/${p.id}">
+              ${icon(ic)}<b>${p.title}</b>
+              <span class="muted small">${(p.data.slots || []).length} ไม้ · อัปเดต ${fmtDate(p.updatedAt)}</span>
+            </a>`,
+          )}</div>`
+        : emptyState(ic, `ยังไม่มี${title}`, text)}`;
+  };
+  return html`${homeTop('plans')}
+    ${section('attack', 'แผนบุก', 'swords', 'กด "สร้างแผนบุก" — วางว่าแต่ละไม้ใช้ทีมไหนตีบ้านไหน')}
+    ${section('defense', 'แผนกัน', 'shield', 'กด "สร้างแผนกัน" — วางบ้านกันของกิลด์ แต่ละไม้ใส่ทีมสำรองได้ตามลำดับ')}`;
 }
 
 function viewPlan(id) {
   const p = findPlan(id);
   if (!p) return html`<p class="center muted">ไม่พบแผน</p>`;
   return html`<div class="toolbar">
-      <a class="btn ghost" href="#/plans">← กลับ</a>
-      <h2>${p.title}</h2>
-      <button class="btn" data-action="share" data-hash="#/p/${p.id}">🔗 แชร์ลิงก์</button>
-      ${can('editor') ? html`<a class="btn" href="#/p/${p.id}/edit">แก้ไข</a><button class="btn danger" data-action="del-plan" data-id="${p.id}">ลบ</button>` : ''}
+      <a class="btn ghost" href="#/plans">${icon('back')} กลับ</a>
+      <h2>${icon(p.data.kind === 'attack' ? 'swords' : 'shield')} ${p.title}</h2>
+      <button class="btn" data-action="share" data-hash="#/p/${p.id}">${icon('link')} แชร์ลิงก์</button>
+      ${can('editor') ? html`<a class="btn" href="#/p/${p.id}/edit">${icon('edit')} แก้ไข</a><button class="btn danger" data-action="del-plan" data-id="${p.id}">${icon('trash')} ลบ</button>` : ''}
     </div>
     ${p.data.note ? html`<div class="panel pre note">${p.data.note}</div>` : ''}
     ${(p.data.slots || []).map(
-      (s) => html`<div class="panel">
+      (s) => html`<div class="panel frame">
         <h3>${s.name}</h3>
         ${(s.options || []).map(
           (o, i) => html`<div class="option">
@@ -506,9 +613,10 @@ function viewPlan(id) {
 
 function viewPlanEdit(id) {
   if (!state.edit || state.edit.__key !== `p:${id}`) {
-    const p = id === 'new' ? null : findPlan(id);
-    if (id !== 'new' && !p) return html`<p class="center muted">ไม่พบแผน</p>`;
-    const data = p ? clone(p.data) : { kind: 'defense', note: '', slots: [] };
+    const isNew = id.startsWith('new');
+    const p = isNew ? null : findPlan(id);
+    if (!isNew && !p) return html`<p class="center muted">ไม่พบแผน</p>`;
+    const data = p ? clone(p.data) : { kind: id === 'new-attack' ? 'attack' : 'defense', note: '', slots: [] };
     data.slots ||= [];
     for (const s of data.slots) {
       s.options ||= [];
@@ -517,7 +625,7 @@ function viewPlanEdit(id) {
     state.edit = { __key: `p:${id}`, title: p?.title || '', data };
   }
   const e = state.edit;
-  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id === 'new' ? '#/plans' : `#/p/${id}`}">← ยกเลิก</a><h2>${id === 'new' ? 'สร้างแผน' : 'แก้ไขแผน'}</h2></div>
+  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id.startsWith('new') ? '#/plans' : `#/p/${id}`}">${icon('back')} ยกเลิก</a><h2>${id.startsWith('new') ? `สร้างแผน${e.data.kind === 'attack' ? 'บุก' : 'กัน'}` : 'แก้ไขแผน'}</h2></div>
     <div class="panel">
       <div class="grid2">
         <label>ชื่อแผน <input value="${e.title}" data-bind="title" /></label>
@@ -556,10 +664,10 @@ function viewAdmin() {
       .catch((e) => toast(errMsg(e), true));
     return html`<p class="center muted">กำลังโหลด...</p>`;
   }
-  return html`<h2>แอดมิน</h2>
+  return html`<div class="toolbar"><a class="btn ghost" href="#/">${icon('back')} กลับ</a><h2>${icon('settings')} ตั้งค่ากิลด์</h2></div>
     <div class="admin-grid">
-      <div class="panel">
-        <h3>🔑 เปลี่ยนรหัสกิลด์</h3>
+      <div class="panel frame">
+        <h3>${icon('key')} เปลี่ยนรหัสกิลด์</h3>
         <p class="muted small">เมื่อเปลี่ยนรหัส ทุกคนที่เปิดเว็บอยู่จะถูกล็อคทันทีและต้องใช้รหัสใหม่</p>
         <form data-form="password">
           <input type="password" name="current" placeholder="รหัสปัจจุบัน" autocomplete="current-password" required />
@@ -568,11 +676,11 @@ function viewAdmin() {
           <button class="btn primary">เปลี่ยนรหัส</button>
         </form>
       </div>
-      <div class="panel">
-        <h3>🚪 ความปลอดภัย</h3>
+      <div class="panel frame">
+        <h3>${icon('lock')} ความปลอดภัย</h3>
         <p class="muted small">บังคับออกจากระบบทุกคน (ยกเว้นคุณ) ต้อง Login Discord ใหม่</p>
         <button class="btn danger" data-action="revoke-all">เตะทุกคนออกจากระบบ</button>
-        <h3>📥 นำเข้าจาก 7k-note</h3>
+        <h3>${icon('download')} นำเข้าจาก 7k-note</h3>
         <form data-form="import">
           <input name="guildCode" placeholder="รหัสกิลด์ 7k-note เช่น SExN7AHJ" value="SExN7AHJ" />
           <textarea name="json" rows="3" placeholder="หรือวาง JSON ที่ export มา"></textarea>
@@ -581,7 +689,7 @@ function viewAdmin() {
       </div>
     </div>
     <div class="panel">
-      <h3>👥 สมาชิก (${a.members.length})</h3>
+      <h3>${icon('users')} สมาชิก (${a.members.length})</h3>
       <form data-form="add-member" class="inline">
         <input name="discordId" placeholder="Discord User ID" required pattern="\\d{15,22}" />
         <input name="note" placeholder="ชื่อ (ไม่บังคับ)" />
@@ -605,7 +713,7 @@ function viewAdmin() {
       </table></div>
     </div>
     <div class="panel">
-      <h3>🕵️ บันทึกการใช้งาน</h3>
+      <h3>${icon('log')} บันทึกการใช้งาน</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>รายละเอียด</th><th>IP</th></tr></thead>
         <tbody>${a.audit.map(
@@ -674,17 +782,33 @@ function route() {
 }
 
 function renderNav() {
-  if (!state.me) return ($nav.innerHTML = '');
   const h = location.hash || '#/';
-  const link = (href, label, active) => html`<a href="${href}" class="${active ? 'active' : ''}">${label}</a>`;
+  const { dow, time } = bkkNow();
+  const kind = state.data && schedule()[dow];
+  const link = (href, ic, label, active) => html`<a href="${href}" class="${active ? 'active' : ''}">${icon(ic)} ${label}</a>`;
   $nav.innerHTML = fmt(html`
-    ${state.token
-      ? html`${link('#/', 'ทีมศัตรู', h === '#/' || h.startsWith('#/t') || h === '#/new')}${link('#/plans', 'แผน', h.startsWith('#/p'))}${can('admin') ? link('#/admin', 'แอดมิน', h === '#/admin') : ''}
-        <button class="btn small ghost" data-action="lock" title="ล็อค">🔒</button>`
-      : ''}
-    <span class="user">${state.me.avatar ? html`<img src="${state.me.avatar}" alt="" />` : ''}<span>${state.me.name}</span><span class="role">${ROLE_LABEL[state.me.role]}</span></span>
-    <button class="btn small ghost" data-action="logout">ออก</button>`);
+    <div class="clock">
+      <div><div class="clock-time" id="clock">${time}</div><div class="clock-sub">เวลาไทย</div></div>
+      ${kind ? html`<div class="today">${DAYS[dow]} <span class="pill ${kind}">${DAY_KIND[kind].full}</span></div>` : ''}
+    </div>
+    ${state.me && state.token
+      ? html`<div class="navlinks">
+          ${link('#/', 'swords', 'บ้านศัตรู', h === '#/' || h.startsWith('#/t') || h === '#/new')}
+          ${link('#/plans', 'clipboard', 'แผน', h.startsWith('#/p'))}
+          ${can('admin') ? link('#/admin', 'settings', 'ตั้งค่า', h === '#/admin') : ''}
+        </div>
+        <button class="btn icon ghost" data-action="lock" title="ล็อคหน้าจอ">${icon('lock')}</button>`
+      : html`<span class="spacer"></span>`}
+    ${state.me
+      ? html`<span class="user">${state.me.avatar ? html`<img src="${state.me.avatar}" alt="" />` : ''}<span>${state.me.name}</span><span class="role">${ROLE_LABEL[state.me.role]}</span></span>
+        <button class="btn icon ghost" data-action="logout" title="ออกจากระบบ">${icon('logout')}</button>`
+      : ''}`);
 }
+
+setInterval(() => {
+  const el = document.getElementById('clock');
+  if (el) el.textContent = bkkNow().time;
+}, 1000);
 
 function render() {
   renderNav();
@@ -804,9 +928,25 @@ const actions = {
   async 'save-plan'(el) {
     const id = el.dataset.id;
     const body = { title: state.edit.title, data: state.edit.data };
-    const r = id === 'new' ? await api('POST', '/plans', body) : await api('PUT', `/plans/${id}`, body);
+    const isNew = id.startsWith('new');
+    const r = isNew ? await api('POST', '/plans', body) : await api('PUT', `/plans/${id}`, body);
     toast('บันทึกแล้ว');
-    await refresh(`#/p/${id === 'new' ? r.id : id}`);
+    await refresh(`#/p/${isNew ? r.id : id}`);
+  },
+  async 'day-cycle'(el) {
+    const prev = schedule();
+    const next = [...prev];
+    const i = Number(el.dataset.i);
+    next[i] = KIND_CYCLE[(KIND_CYCLE.indexOf(next[i]) + 1) % KIND_CYCLE.length];
+    state.data.schedule = next;
+    render();
+    try {
+      await api('PUT', '/schedule', { schedule: next });
+    } catch (e) {
+      if (state.data) state.data.schedule = prev;
+      render();
+      throw e;
+    }
   },
   async 'revoke-all'() {
     if (!confirm('บังคับให้ทุกคน (ยกเว้นคุณ) ออกจากระบบ?')) return;

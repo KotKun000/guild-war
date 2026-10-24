@@ -122,6 +122,23 @@ function targetOut(t, counters) {
   };
 }
 
+// Monday-first. attack = วันตี, defense = วันจัดบ้าน, rest = วันพัก
+const DAY_KINDS = ['attack', 'defense', 'rest'];
+const DEFAULT_SCHEDULE = ['attack', 'defense', 'attack', 'rest', 'defense', 'attack', 'defense'];
+
+async function getSchedule(env) {
+  const s = parse(await getSetting(env, 'schedule'), null);
+  return Array.isArray(s) && s.length === 7 ? s : DEFAULT_SCHEDULE;
+}
+
+on('PUT', '/schedule', { role: 'editor' }, async ({ env, request, ctx, body }) => {
+  const s = body.schedule;
+  if (!Array.isArray(s) || s.length !== 7 || !s.every((d) => DAY_KINDS.includes(d))) throw new HttpError(400, 'invalid_schedule');
+  await setSettings(env, { schedule: JSON.stringify(s) });
+  await audit(env, request, ctx.member.discord_id, 'schedule_update', s.join(','));
+  return { schedule: s };
+});
+
 on('GET', '/data', {}, async ({ env }) => {
   const [t, c, p, m] = await env.DB.batch([
     env.DB.prepare('SELECT * FROM targets ORDER BY updated_at DESC'),
@@ -135,6 +152,7 @@ on('GET', '/data', {}, async ({ env }) => {
     targets: t.results.map((row) => targetOut(row, byTarget[row.id] || [])),
     plans: p.results.map((row) => ({ id: row.id, title: row.title, data: parse(row.data, {}), createdAt: row.created_at, updatedAt: row.updated_at })),
     names: Object.fromEntries(m.results.map((r) => [r.discord_id, r.global_name || r.username])),
+    schedule: await getSchedule(env),
   };
 });
 
@@ -316,6 +334,14 @@ on('POST', '/import', { role: 'admin' }, async ({ env, request, ctx, body }) => 
         `INSERT INTO plans (id, title, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET title = excluded.title, data = excluded.data, updated_at = excluded.updated_at`,
       ).bind(/^[\w-]{4,32}$/.test(p.id) ? p.id : newId(), s.title, s.data, p.createdAt || now, p.updatedAt || now),
+    );
+  }
+  if (Array.isArray(src.schedule) && src.schedule.length === 7 && src.schedule.every((d) => DAY_KINDS.includes(d))) {
+    stmts.push(
+      env.DB.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(
+        'schedule',
+        JSON.stringify(src.schedule),
+      ),
     );
   }
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
