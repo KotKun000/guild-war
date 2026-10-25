@@ -30,15 +30,17 @@ Cloudflare Pages + Pages Functions + D1
    - `DISCORD_SERVER_ID` (ไม่บังคับ) = ให้ทุกคนใน Discord server กิลด์เข้าได้อัตโนมัติ
    - `DISCORD_ROLE_ID` (ไม่บังคับ) = ต้องมี role นี้ใน server ด้วย
    - ถ้าไม่ตั้ง server → แอดมินเพิ่มสมาชิกเองทีละคนด้วย Discord ID ในหน้าแอดมิน
-4. **Deploy + secrets**
+4. **Deploy (เชื่อม GitHub)** — Cloudflare Dashboard → Workers & Pages → Create → "Looking to deploy Pages?" → Import Git repository
+   - Project name `guild-war-egg2k`, Framework preset None, Build command ว่าง, Build output directory `public`
+   - push ขึ้น `main` = deploy อัตโนมัติ
+5. **Secrets** (ตั้งครั้งเดียว แล้ว deploy ใหม่ให้มีผล)
    ```bash
-   npm run deploy
    npx wrangler pages secret put DISCORD_CLIENT_ID --project-name guild-war-egg2k
    npx wrangler pages secret put DISCORD_CLIENT_SECRET --project-name guild-war-egg2k
-   npx wrangler pages secret put SESSION_SECRET --project-name guild-war-egg2k   # สุ่ม 64 ตัวอักษร
-   npm run deploy
+   npx wrangler pages secret put SESSION_SECRET --project-name guild-war-egg2k     # สุ่มยาว 64+ ตัวอักษร
+   npx wrangler pages secret put ADMIN_DISCORD_IDS --project-name guild-war-egg2k  # Discord user ID แอดมิน คั่นด้วย ,
    ```
-5. เปิดเว็บ → Login ด้วยบัญชีแอดมิน → ตั้งรหัสกิลด์ → หน้าแอดมิน → นำเข้าจาก 7k-note (`SExN7AHJ`)
+6. เปิดเว็บ → Login ด้วยบัญชีแอดมิน → ตั้งรหัสกิลด์ → หน้าแอดมิน → นำเข้าจาก 7k-note (`SExN7AHJ`)
 
 ## พัฒนาในเครื่อง
 สร้างไฟล์ `.dev.vars`:
