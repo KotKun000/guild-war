@@ -5,12 +5,9 @@ compatibility_date = "2026-10-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "guild-war-egg2k"
-# Replace with the id printed by: npx wrangler d1 create guild-war-egg2k
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "c9917fbb-0fcb-4623-bc0c-dc2fd7bf890a"
 
 [vars]
-# Comma separated Discord user IDs that are always admin
-ADMIN_DISCORD_IDS = ""
 # Optional: allow everyone in this Discord server (requires guilds.members.read scope)
 DISCORD_SERVER_ID = ""
 # Optional: also require this role inside DISCORD_SERVER_ID
@@ -20,5 +17,6 @@ DEFAULT_ROLE = "editor"
 # Minutes an unlock (guild password) stays valid while the tab is open
 UNLOCK_MINUTES = "120"
 
-# Secrets (set with `npx wrangler pages secret put NAME` or in .dev.vars locally):
-#   DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, SESSION_SECRET
+# Secrets (set with `npx wrangler pages secret put NAME --project-name guild-war-egg2k`, or in .dev.vars locally):
+#   DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, SESSION_SECRET,
+#   ADMIN_DISCORD_IDS (comma separated Discord user IDs that are always admin)
