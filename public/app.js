@@ -33,6 +33,24 @@ const STATS = [
   ['rejuv', 'ฟื้นคืน%'],
 ];
 const STAT_LABEL = Object.fromEntries(STATS);
+// in-game names (as shown in the hero stat window)
+const STAT_FULL = {
+  atk: 'พลังโจมตี',
+  def: 'พลังป้องกัน',
+  hp: 'HP',
+  spd: 'ความเร็วโจมตี',
+  critRate: 'อัตราคริติคอล',
+  critDmg: 'ความเสียหายคริติคอล',
+  weak: 'อัตราโจมตีจุดอ่อน',
+  block: 'อัตราบล็อก',
+  hit: 'ผลเข้าเป้า',
+  resist: 'ต้านทานผล',
+  dtr: 'ลดความเสียหายที่ได้รับ',
+  amp: 'เสริมความเสียหาย',
+  crush: 'บดขยี้',
+  resil: 'ยืดหยุ่น',
+  rejuv: 'ฟื้นคืน',
+};
 const ROLE_LABEL = { viewer: 'ดูอย่างเดียว', editor: 'แก้ไขได้', admin: 'แอดมิน' };
 const DAYS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
 const DAY_SHORT = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'];
@@ -107,7 +125,16 @@ const AS = { hero: new Map(), pet: new Map(), heroes: [], pets: [], sets: {}, ri
 const AWAKE_RE = /^(.*?)(\s+awake(?:\s+epic)?)?$/i;
 
 function buildAssets(a) {
-  Object.assign(AS, { heroes: a.heroes, pets: a.pets, sets: a.sets, rings: a.rings, types: a.types || {} });
+  Object.assign(AS, {
+    heroes: a.heroes,
+    pets: a.pets,
+    sets: a.sets || {},
+    rings: a.rings || {},
+    types: a.types || {},
+    skills: a.skills || {},
+    stats: a.stats || {},
+    awakeBadge: a.awakeBadge || null,
+  });
   for (const h of a.heroes) for (const n of h.aliases) AS.hero.set(n, h);
   for (const p of a.pets) for (const n of p.aliases) AS.pet.set(n, p);
 }
@@ -182,6 +209,10 @@ function setUnlock(r) {
   state.lastActive = Date.now();
 }
 
+async function adminUnlock() {
+  setUnlock(await api('POST', '/unlock', { bypass: true }));
+}
+
 async function boot() {
   const err = new URLSearchParams(location.search).get('error');
   if (err) {
@@ -196,6 +227,9 @@ async function boot() {
     const r = await api('GET', '/me');
     state.me = r.user;
     state.passwordSet = r.passwordSet;
+    state.bypass = r.bypass;
+    // admins with Discord 2FA skip the guild password
+    if (r.bypass && r.passwordSet) await adminUnlock().catch(() => {});
   } catch {
     state.me = null;
   }
@@ -281,111 +315,173 @@ const TYPES = [
   ['Universal', 'สมดุล'],
 ];
 
-// formation diagram: blue shields = front row, red dots = back row
-const formationDots = (f) =>
-  html`<span class="fdots">${[...Array(5 - f).keys()].map(() => html`<i class="back"></i>`)}${[...Array(f).keys()].map(() => html`<i class="front"></i>`)}</span>`;
+// ---------- unit cards / orbs (in-game look) ----------
+const ORDER_CLASS = ['o1', 'o2', 'o3'];
+const SKILL_KIND = { '03': 1, '02': 2, '06': 3 }; // 7K Note skill file suffix -> our skill number (1 บน, 2 ล่าง, 3 อเวค)
+const SKILL_ORDER = [3, 1, 2]; // display order in the skill queue: อเวค, บน, ล่าง
+const PCT_STATS = new Set(['critRate', 'critDmg', 'weak', 'block', 'hit', 'resist', 'dtr', 'amp', 'crush', 'resil', 'rejuv']);
+const SPARK = 'M0-12C1.4-3.2 3.2-1.4 12 0C3.2 1.4 1.4 3.2 0 12C-1.4 3.2-3.2 1.4-12 0C-3.2-1.4-1.4-3.2 0-12Z';
 
-function heroCard(name, { cls = '', attrs = raw('') } = {}) {
-  if (!name) return html`<div class="hcard empty ${cls}" ${attrs}><span class="plus">+</span></div>`;
+// skills of a hero (awake form adds the อเวค skill): [{ n, name, img }]
+function skillsOf(name) {
   const info = heroInfo(name);
   const h = AS.hero.get(info.base);
-  return html`<div class="hcard ${h?.type ? `t-${h.type}` : ''} ${cls}" title="${name}" ${attrs}>
-    ${portrait(info.img)}
-    ${h?.type && AS.types?.[h.type] ? html`<img class="type" src="${AS.types[h.type]}" alt="" />` : ''}
-    ${info.awake ? html`<span class="awk">AWK</span>` : ''}
+  const suffix = (name || '').slice(info.base.length);
+  const keys = [name, ...(h?.aliases || []).map((a) => a + suffix), ...(h?.aliases || []).map((a) => (info.awake ? `${a} awake` : a))];
+  for (const k of keys) {
+    const list = AS.skills?.[k];
+    if (list) return list.filter(Boolean).map((s) => ({ n: SKILL_KIND[s.kind], name: s.name, img: s.img })).filter((s) => s.n).sort((a, b) => SKILL_ORDER.indexOf(a.n) - SKILL_ORDER.indexOf(b.n));
+  }
+  return [...(info.awake ? [3] : []), 1, 2].map((n) => ({ n, name: SKILL_LABEL[n], img: null }));
+}
+const skillInfo = (heroName, n) => skillsOf(heroName).find((s) => s.n === n) || { n, name: SKILL_LABEL[n], img: null };
+
+const ys = (n) => (n <= 1 ? [50] : [...Array(n).keys()].map((i) => 24 + (52 * i) / (n - 1)));
+const spark = (x, y, cls, s = 0.62) => raw(`<path class="${cls}" transform="translate(${x} ${y}) scale(${s})" d="${SPARK}"/>`);
+const orbRing = raw('<circle cx="50" cy="50" r="44" class="orb-ring"/>');
+
+function formationOrb(f) {
+  const back = ys(5 - f).map((y) => spark(5 - f === 1 ? 36 : 34, y, 'sp-back', 5 - f === 1 ? 0.82 : 0.6));
+  const front = ys(f).map((y, i) => spark(66 - i * 0.8, y, 'sp-front', f === 1 ? 0.82 : 0.6));
+  return html`<svg viewBox="0 0 100 100" class="orb-svg">${orbRing}${back}${front}</svg>`;
+}
+
+function skillOrb(count) {
+  const pos = [[30, 52], [57, 33], [61, 64]];
+  return html`<svg viewBox="0 0 100 100" class="orb-svg">${orbRing}${pos.map(([x, y], i) => spark(x, y, i < count ? 'sp-gold' : 'sp-dim', 1))}</svg>`;
+}
+
+// orders: skill-queue positions (0-based) that belong to this hero
+function heroCard(name, { cls = '', attrs = raw(''), orders = [] } = {}) {
+  if (!name) return html`<div class="ucard empty ${cls}" ${attrs}><span class="plus">+</span></div>`;
+  const info = heroInfo(name);
+  const h = AS.hero.get(info.base);
+  return html`<div class="ucard t-${h?.type || 'none'} ${cls}" title="${name}" ${attrs}>
+    <div class="art">${portrait(info.img)}</div>
+    ${h?.type && AS.types?.[h.type] ? html`<span class="role"><img src="${AS.types[h.type]}" alt="" /></span>` : ''}
+    ${info.awake && AS.awakeBadge ? html`<img class="awk-badge" src="${AS.awakeBadge}" alt="อเวค" title="อเวค" />` : info.awake ? html`<span class="awk">AWK</span>` : ''}
     <span class="nm">${info.base}</span>
+    ${orders.length ? html`<span class="ords">${orders.map((o) => html`<b class="ord ${ORDER_CLASS[o]}">${o + 1}</b>`)}</span>` : ''}
   </div>`;
 }
 
 function petCard(name, cls = '') {
   const p = AS.pet.get(name);
-  return html`<div class="pcard ${name ? '' : 'empty'} ${cls}" title="${name || ''}">${name ? (p ? portrait(p.img) : html`<span class="nm">${name}</span>`) : html`<span class="plus">+</span>`}</div>`;
+  if (!name) return html`<div class="ucard pet empty ${cls}"><span class="plus">+</span></div>`;
+  return html`<div class="ucard pet ${cls}" title="${name}"><div class="art">${p ? portrait(p.img) : ''}</div><span class="nm">${name}</span></div>`;
 }
 
-// edit = { prefix, skillsPath } turns the board into an editor (slots become clickable)
-function board(team, skills, title = '', edit = null) {
+// edit = { prefix, skillsPath } turns the board into an editor; view = { key } makes heroes open the detail modal.
+// mirror = back row on the left (attacking side facing the enemy).
+function board(team, skills, title = '', edit = null, { view = null, mirror = false, tone = '' } = {}) {
   const f = team.front || 2;
   const sel = state.sel;
   const isSel = (field, i) => edit && sel && sel.team === edit.prefix && sel.field === field && (field === 'pet' || sel.i === i);
   const act = (action, extra = '') => (edit ? raw(`role="button" tabindex="0" data-action="${action}" data-team="${esc(edit.prefix)}" ${extra}`) : raw(''));
+  const viewAct = (action) => (view ? raw(`role="button" tabindex="0" data-action="${action}" data-key="${esc(view.key)}"`) : raw(''));
+  const ordersOf = (i) => skills.map((s, o) => (s.slot === i ? o : -1)).filter((o) => o >= 0);
   const slot = (i) =>
-    html`<div class="slot-wrap">${heroCard(team.slots[i], { cls: isSel('slots', i) ? 'selected' : edit ? '' : 'ghost', attrs: act('slot', `data-field="slots" data-i="${i}"`) })}
+    html`<div class="slot-wrap">${heroCard(team.slots[i], {
+      cls: isSel('slots', i) ? 'selected' : '',
+      attrs: edit ? act('slot', `data-field="slots" data-i="${i}"`) : team.slots[i] ? viewAct('open-detail') : raw(''),
+      orders: ordersOf(i),
+    })}
       ${edit && team.slots[i] ? html`<button type="button" class="x" data-action="slot-clear" data-team="${edit.prefix}" data-field="slots" data-i="${i}" title="เอาออก">×</button>` : ''}
       ${edit && team.slots[i] && AS.hero.get(heroInfo(team.slots[i]).base)?.awk ? html`<button type="button" class="awk-toggle" data-action="toggle-awk" data-team="${edit.prefix}" data-i="${i}" title="สลับร่างปกติ/อเวค">⟳</button>` : ''}
     </div>`;
   const petSlot = (field, i, value, small) =>
     html`<div class="slot-wrap" ${act('slot', `data-field="${field}" data-i="${i}"`)}>${petCard(value, `${small ? 'small' : ''} ${isSel(field, i) ? 'selected' : ''}`)}</div>`;
-  const heroes = heroesOf(team);
-  return html`<div class="board ${edit && state.activeTeam === edit.prefix ? 'active' : ''}">
-    ${title || edit ? html`<div class="board-head"><b>${title}</b>${edit ? html`<button type="button" class="btn icon ghost small" data-action="team-reset" data-team="${edit.prefix}" data-skills="${edit.skillsPath}" title="ล้างทีม">${icon('reset')}</button>` : ''}</div>` : ''}
+  const front = html`<div class="col front">${[...Array(f).keys()].map(slot)}<span class="col-label">หน้า</span></div>`;
+  const back = html`<div class="col back">${[...Array(5 - f).keys()].map((i) => slot(i + f))}<span class="col-label">หลัง</span></div>`;
+  const skillAttrs = edit ? act('open-skills', `data-skills="${esc(edit.skillsPath)}"`) : view && skills.length ? viewAct('open-skillview') : raw('');
+  return html`<div class="board ${tone} ${edit && state.activeTeam === edit.prefix ? 'active' : ''}">
+    <div class="board-head">
+      <b>${title}</b>
+      ${edit ? html`<button type="button" class="btn icon ghost small" data-action="team-reset" data-team="${edit.prefix}" data-skills="${edit.skillsPath}" title="ล้างทีม">${icon('reset')}</button>` : ''}
+    </div>
     <div class="board-top">
       ${edit
         ? html`<label class="speed-in">${icon('speed')}<input type="number" min="0" value="${team.speed || ''}" placeholder="0" data-bind="${edit.prefix}.speed" data-type="num" /></label>`
-        : team.speed ? html`<span class="speed-in">${icon('speed')}<b>${team.speed}</b></span>` : ''}
+        : html`<span class="speed-in ${view ? 'clickable' : ''}" ${view ? viewAct('open-speed') : raw('')}>${icon('speed')}<b>${team.speed || 0}</b>${view ? icon('down') : ''}</span>`}
     </div>
     <div class="board-grid">
-      <div class="col front">${[...Array(f).keys()].map(slot)}<span class="col-label">หน้า</span></div>
-      <div class="col back">${[...Array(5 - f).keys()].map((i) => slot(i + f))}<span class="col-label">หลัง</span></div>
+      ${mirror ? html`${back}${front}` : html`${front}${back}`}
       <div class="col side">
         ${petSlot('pet', 0, team.pet)}
-        <div class="round formation" ${act('open-formation')} title="รูปแบบ${FORMATIONS[f]} · หน้า ${f} หลัง ${5 - f}">${formationDots(f)}<span>${FORMATIONS[f]}</span></div>
-        ${edit || skills.length
-          ? html`<div class="round skills" ${edit ? act('open-skills', `data-skills="${esc(edit.skillsPath)}"`) : raw('')} title="ลำดับการใช้สกิล">
-              ${skills.length
-                ? html`<span class="sk-list">${skills.map((s, i) => html`<span><b>${i + 1}</b>${portrait(heroInfo(team.slots[s.slot]).img, 'ico')}${SKILL_LABEL[s.skill] || s.skill}</span>`)}</span>`
-                : html`<span class="muted small">${heroes.length ? 'ลำดับสกิล' : '—'}</span>`}
-            </div>`
-          : ''}
+        <div class="orb formation ${edit ? 'clickable' : ''}" ${act('open-formation')} title="รูปแบบ${FORMATIONS[f]} · หน้า ${f} หลัง ${5 - f}">${formationOrb(f)}<span class="orb-label">${FORMATIONS[f]}</span></div>
+        <div class="orb skills ${edit || (view && skills.length) ? 'clickable' : ''}" ${skillAttrs} title="${skills.length ? `ตั้งลำดับการใช้สกิล ${skills.length} ครั้ง` : 'ตั้งลำดับการใช้สกิล'}">${skillOrb(skills.length)}${skills.length ? html`<span class="orb-label">คิวสกิล</span>` : ''}</div>
       </div>
     </div>
-    <div class="reserve"><span>สัตว์เลี้ยงสำรอง</span>${[0, 1, 2, 3].map((i) => (edit || team.extras[i] ? petSlot('extras', i, team.extras[i], true) : ''))}</div>
+    <div class="reserve"><span>สัตว์เลี้ยงสำรอง</span>${[0, 1, 2, 3].map((i) => petSlot('extras', i, team.extras[i], true))}</div>
   </div>`;
 }
 
-const teamView = (team, skills = team?.skills || []) => board(team, skills);
+const teamView = (team, skills = team?.skills || [], opts = {}) => board(team, skills, opts.title || '', null, opts);
+
+// ---------- hero gear / stat display ----------
+const gearSlots = (list, map, n = 3) =>
+  html`<div class="gear-slots">${[...Array(n).keys()].map((i) =>
+    list[i] ? html`<span class="gear" title="${list[i]}">${map[list[i]] ? html`<img src="${map[list[i]]}" alt="${list[i]}" />` : html`<small>${list[i]}</small>`}</span>` : html`<span class="gear empty"></span>`,
+  )}</div>`;
+
+const statPills = (stats) => {
+  const st = STATS.filter(([k]) => typeof stats[k] === 'number' && stats[k] !== 0);
+  return st.length
+    ? html`<dl class="stat-pills">${st.map(
+        ([k, l]) => html`<div class="stat-pill"><dt>${AS.stats?.[k] ? html`<img src="${AS.stats[k]}" alt="" />` : ''}<span>${STAT_FULL[k] || l}</span></dt><dd>${stats[k]}${PCT_STATS.has(k) ? '%' : ''}</dd></div>`,
+      )}</dl>`
+    : html`<p class="muted small">ไม่ได้จดค่าความสามารถ</p>`;
+};
 
 function heroNotesView(notes) {
   const list = (notes || []).filter((n) => n.text || n.sets.length || n.rings.length || Object.keys(n.stats).length);
   if (!list.length) return '';
-  return html`<div class="hero-notes">${list.map(
-    (n) => html`<div class="hero-note">
-      <div class="hn-name">${portrait(heroInfo(n.hero).img, 'ico lg')}${n.hero}</div>
-      ${n.sets.length ? html`<div class="icon-row"><span class="muted">เซ็ต:</span> ${n.sets.map((s) => iconChip(AS.sets[s], s))}</div>` : ''}
-      ${n.rings.length ? html`<div class="icon-row"><span class="muted">แหวน:</span> ${n.rings.map((s) => iconChip(AS.rings[s], s))}</div>` : ''}
-      ${(() => {
-        const st = Object.entries(n.stats).filter(([k, v]) => STAT_LABEL[k] && typeof v === 'number' && v !== 0);
-        return st.length ? html`<div class="stats">${st.map(([k, v]) => html`<span class="stat">${STAT_LABEL[k]} <b>${v}</b></span>`)}</div>` : '';
-      })()}
-      ${n.text ? html`<div class="pre">${n.text}</div>` : ''}
-    </div>`,
-  )}</div>`;
+  return html`<ul class="hero-detail">${list.map(heroDetailRow)}</ul>`;
 }
+
+const heroDetailRow = (n) => html`<li>
+  <div class="hd-left">
+    <div class="hd-head">${heroCard(n.hero, { cls: 'md' })}<b>${n.hero}</b></div>
+    <div class="lbl">เครื่องประดับ</div>${gearSlots(n.rings, AS.rings || {})}
+    <div class="lbl">เซต</div>${gearSlots(n.sets, AS.sets || {})}
+  </div>
+  <div class="hd-right">${statPills(n.stats)}${n.text ? html`<div class="pre note">${n.text}</div>` : ''}</div>
+</li>`;
 
 // ---------- team editor (bound to state.edit via data-bind paths) ----------
 function teamEditor(prefix, team, skills, skillsPath, notes, notesPath, title = '') {
   if (!state.activeTeam) state.activeTeam = prefix;
   return html`<div class="team-editor">
-    <p class="board-hint">แตะช่องเพื่อเลือก แล้วแตะการ์ดในแถบด้านล่างเพื่อใส่ตัว · แตะตัวในทีมแล้วแตะอีกช่องเพื่อสลับ · ใส่ได้ ${MAX_HEROES} ตัว</p>
     ${board(team, skills, title, { prefix, skillsPath })}
+    <p class="board-hint">แตะช่องเพื่อเลือก แล้วแตะการ์ดในแถบด้านล่าง · แตะตัวในทีมแล้วแตะอีกช่องเพื่อสลับ · ใส่ได้ ${MAX_HEROES} ตัว</p>
     ${notes ? notesEditor(notes, notesPath) : ''}
   </div>`;
 }
 
 function notesEditor(notes, notesPath) {
   if (!notes.length) return html`<p class="muted center small">ใส่อัศวินในทีมก่อน แล้วค่อยจดอุปกรณ์/ค่าความสามารถ</p>`;
-  return html`<div class="hn-editor">${notes.map(
-          (n, i) => html`<fieldset>
-            <legend>${portrait(heroInfo(n.hero).img, 'ico lg')}${n.hero}</legend>
-            <div class="grid2">
-              <label>เซ็ต (คั่นด้วย ,) <input list="dl-sets" value="${n.sets.join(', ')}" data-bind="${notesPath}.${i}.sets" data-type="list" /></label>
-              <label>แหวน (คั่นด้วย ,) <input list="dl-rings" value="${n.rings.join(', ')}" data-bind="${notesPath}.${i}.rings" data-type="list" /></label>
-            </div>
-            <div class="stat-grid">${STATS.map(
-              ([k, l]) => html`<label>${l}<input type="number" step="any" value="${n.stats[k] ?? ''}" data-bind="${notesPath}.${i}.stats.${k}" data-type="stat" /></label>`,
-            )}</div>
-            <label>โน้ต <textarea rows="2" data-bind="${notesPath}.${i}.text">${n.text}</textarea></label>
-          </fieldset>`,
-  )}</div>`;
+  const gearEdit = (n, i, field, map) =>
+    html`<div class="gear-slots">${[0, 1, 2].map((k) => {
+      const v = n[field][k];
+      return html`<button type="button" class="gear ${v ? '' : 'empty'}" data-action="pick-gear" data-path="${notesPath}.${i}.${field}" data-k="${k}" data-kind="${field}" title="${v || 'เลือก'}">
+        ${v ? (map[v] ? html`<img src="${map[v]}" alt="${v}" />` : html`<small>${v}</small>`) : html`<span class="plus">+</span>`}
+      </button>`;
+    })}</div>`;
+  return html`<ul class="hero-detail edit">${notes.map(
+    (n, i) => html`<li>
+      <div class="hd-left">
+        <div class="hd-head">${heroCard(n.hero, { cls: 'md' })}<b>${n.hero}</b></div>
+        <div class="lbl">เครื่องประดับ</div>${gearEdit(n, i, 'rings', AS.rings || {})}
+        <div class="lbl">เซต</div>${gearEdit(n, i, 'sets', AS.sets || {})}
+      </div>
+      <div class="hd-right">
+        <div class="stat-edit">${STATS.map(
+          ([k, l]) => html`<label class="stat-pill">${AS.stats?.[k] ? html`<img src="${AS.stats[k]}" alt="" />` : ''}<span>${STAT_FULL[k] || l}</span><input type="number" step="any" value="${n.stats[k] ?? ''}" placeholder="—" data-bind="${notesPath}.${i}.stats.${k}" data-type="stat" />${PCT_STATS.has(k) ? html`<i>%</i>` : ''}</label>`,
+        )}</div>
+        <label>โน้ต <textarea rows="2" data-bind="${notesPath}.${i}.text" placeholder="เช่น ต้องเร็วกว่าใคร ค่าไหนสำคัญสุด">${n.text}</textarea></label>
+      </div>
+    </li>`,
+  )}</ul>`;
 }
 
 // keep heroNotes / skills consistent with heroes in the team
@@ -544,6 +640,7 @@ function viewUnlock() {
     <div class="lock-icon">${icon('lock')}</div>
     <div class="who">${state.me.avatar ? html`<img src="${state.me.avatar}" alt="" />` : ''} ${state.me.name}</div>
     <h2>ใส่รหัสกิลด์</h2>
+    ${state.bypass ? html`<button class="btn primary block" data-action="admin-unlock">${icon('key')} เข้าด้วยสิทธิ์แอดมิน (Discord 2FA)</button><p class="muted small">หรือใส่รหัสกิลด์</p>` : ''}
     <form data-form="unlock">
       <input type="password" name="password" placeholder="รหัสกิลด์" autocomplete="current-password" required autofocus />
       <button class="btn primary">ปลดล็อค</button>
@@ -592,34 +689,52 @@ function viewTarget(id) {
   const t = findTarget(id);
   if (!t) return html`<p class="center muted">ไม่พบทีมนี้ (อาจถูกลบไปแล้ว)</p>`;
   const by = (uid) => state.data.names[uid] || '';
+  const n = t.counters.length;
+  const ci = state.ci === 'all' ? 'all' : Math.min(state.ci || 0, Math.max(n - 1, 0));
+  const c = ci === 'all' ? null : t.counters[ci];
+  const enemyBoard = teamView(t.team, t.team.skills || [], { view: { key: `t:${t.id}` }, tone: 'enemy' });
+  const counterNote = (c, i) => html`<div class="panel frame note-card">
+    <div class="note-head"><b class="gold">ทีมแก้ #${i + 1}</b><span class="muted small">${by(c.createdBy)} · ${fmtDate(c.updatedAt)}</span>
+      ${can('editor') ? html`<span class="spacer"></span><a class="btn icon small" href="#/t/${t.id}/c/${c.id}/edit" title="แก้ไข">${icon('edit')}</a><button class="btn icon small danger" data-action="del-counter" data-id="${c.id}" title="ลบ">${icon('trash')}</button>` : ''}
+    </div>
+    ${c.note ? html`<div class="pre">${c.note}</div>` : html`<p class="muted">ไม่มีโน้ต</p>`}
+    <button type="button" class="btn block" data-action="open-detail" data-key="c:${c.id}">${icon('users')} ดูรายละเอียดทีมแก้ #${i + 1} (${heroesOf(c.team).length})</button>
+  </div>`;
+
   return html`<div class="toolbar">
-      <a class="btn ghost" href="#/">${icon('back')} กลับ</a>
-      <h2>บ้านศัตรู</h2>
-      <button class="btn" data-action="share" data-hash="#/t/${t.id}">${icon('link')} แชร์ลิงก์</button>
-      ${can('editor') ? html`<a class="btn" href="#/t/${t.id}/edit">${icon('edit')} แก้ไข</a><button class="btn danger" data-action="del-target" data-id="${t.id}">${icon('trash')} ลบ</button>` : ''}
+      <a class="btn ghost" href="#/">${icon('back')} EGG2K</a>
+      <span class="spacer"></span>
+      <button class="btn small" data-action="share" data-hash="#/t/${t.id}">${icon('link')} แชร์ลิงก์</button>
+      ${can('editor') ? html`<a class="btn small" href="#/t/${t.id}/edit">${icon('edit')} แก้บ้านศัตรู</a><button class="btn small danger" data-action="del-target" data-id="${t.id}">${icon('trash')}</button>` : ''}
     </div>
-    <div class="panel enemy frame">
-      ${teamView(t.team)}
-      ${t.tags.length ? html`<div>${t.tags.map((x) => html`<span class="tag">${x}</span>`)}</div>` : ''}
-      ${t.note ? html`<div class="pre note">${t.note}</div>` : ''}
-      <div class="muted small">อัปเดต ${fmtDate(t.updatedAt)}</div>
-    </div>
-    <div class="section-head defense">
-      <h2>${icon('shield')} ทีมแก้ <span class="n">${t.counters.length} ทีม</span></h2>
+    <nav class="ctabs">
+      <div class="seg">${t.counters.map(
+        (x, i) => html`<a href="#" class="${ci === i ? 'active' : ''}" data-action="counter-tab" data-i="${i}">${i === 0 ? '♛ ' : ''}ทีมแก้ #${i + 1}${Date.now() - x.createdAt < 3 * 864e5 ? html` <em class="new">ใหม่</em>` : ''}</a>`,
+      )}</div>
+      ${n > 1 ? html`<a href="#" class="btn ${ci === 'all' ? 'primary' : ''}" data-action="counter-tab" data-i="all">${icon('grid')} ดูทั้งหมด</a>` : ''}
       ${can('editor') ? html`<a class="btn primary" href="#/t/${t.id}/c/new">${icon('plus')} เพิ่มทีมแก้</a>` : ''}
-    </div>
-    <div class="counters">${t.counters.map(
-      (c, i) => html`<div class="panel counter">
-        <div class="counter-head"><b>ทีมแก้ #${i + 1}</b>
-          <span class="muted small">${by(c.createdBy)} · ${fmtDate(c.updatedAt)}</span>
-          ${can('editor') ? html`<span class="spacer"></span><a class="btn small" href="#/t/${t.id}/c/${c.id}/edit">${icon('edit')} แก้ไข</a><button class="btn small danger" data-action="del-counter" data-id="${c.id}">${icon('trash')}</button>` : ''}
+    </nav>
+    ${ci === 'all'
+      ? html`<div class="all-counters">${t.counters.map(
+          (x, i) => html`<div class="ac-item">${teamView(x.team, x.skills, { title: `ทีมแก้ #${i + 1}`, view: { key: `c:${x.id}` }, mirror: true })}${counterNote(x, i)}</div>`,
+        )}</div>`
+      : html`<div class="vs-wrap">
+          <div class="vs-side"><h3 class="side-title gold">${c ? `ทีมแก้ #${ci + 1}` : 'ทีมแก้'}</h3>
+            ${c
+              ? html`${teamView(c.team, c.skills, { view: { key: `c:${c.id}` }, mirror: true })}<p class="board-hint">กดอัศวินเพื่อดูค่าความสามารถและอุปกรณ์</p>`
+              : html`<div class="board empty-board"><p class="muted">ยังไม่มีทีมแก้สำหรับบ้านนี้</p>${can('editor') ? html`<a class="btn primary" href="#/t/${t.id}/c/new">${icon('plus')} เพิ่มทีมแก้</a>` : ''}</div>`}
+          </div>
+          <div class="vs-mark" aria-hidden="true"><span>VS</span></div>
+          <div class="vs-side"><h3 class="side-title enemy-title">บ้านศัตรู</h3>${enemyBoard}</div>
         </div>
-        ${teamView(c.team, c.skills)}
-        ${c.note ? html`<div class="pre note">${c.note}</div>` : ''}
-        ${heroNotesView(c.heroNotes)}
-      </div>`,
-    )}</div>
-    ${t.counters.length ? '' : emptyState('shield', 'ยังไม่มีทีมแก้', 'กด "เพิ่มทีมแก้" เพื่อบอกสมาชิกว่าบ้านนี้ควรใช้ทีมไหนตี')}`;
+        <div class="notes-row">
+          ${c ? counterNote(c, ci) : ''}
+          <div class="panel frame note-card enemy">
+            <div class="note-head"><b>บ้านศัตรู</b><span class="muted small">อัปเดต ${fmtDate(t.updatedAt)}</span></div>
+            ${t.tags.length ? html`<div class="tags">${t.tags.map((x) => html`<span class="tag">${x}</span>`)}</div>` : ''}
+            ${t.note ? html`<div class="pre">${t.note}</div>` : html`<p class="muted">ไม่มีโน้ต</p>`}
+          </div>
+        </div>`}`;
 }
 
 function viewTargetEdit(id) {
@@ -633,14 +748,19 @@ function viewTargetEdit(id) {
   syncTeam(e.team, e.skills);
   const tags = [...new Set([...TAG_PRESETS, ...allNames().tags, ...e.tags])];
   return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id === 'new' ? '#/' : `#/t/${id}`}">${icon('back')} ยกเลิก</a><h2>${id === 'new' ? 'เพิ่มบ้านศัตรู' : 'แก้ไขบ้านศัตรู'}</h2></div>
-    <div class="panel frame editor-panel">
-      ${teamEditor('team', e.team, e.skills, 'skills', null, null, 'บ้านศัตรู')}
-      <div class="lbl">แท็ก</div>
-      <div class="tag-pick">
-        ${tags.map((x) => html`<button type="button" class="tagbtn ${e.tags.includes(x) ? 'on' : ''}" data-action="tag-toggle" data-tag="${x}">${e.tags.includes(x) ? '✓' : '+'} ${x}</button>`)}
-        <input class="tag-in" placeholder="แท็กอื่น + Enter" data-tag-input />
+    <div class="edit-2col">
+      <div><h3 class="side-title enemy-title">${id === 'new' ? 'บ้านศัตรูใหม่' : 'บ้านศัตรู'}</h3>${teamEditor('team', e.team, e.skills, 'skills', null, null, '')}</div>
+      <div><h3 class="side-title enemy-title">รายละเอียดบ้านศัตรู</h3>
+        <div class="panel frame">
+          ${state.data.targets.length ? html`<button type="button" class="btn small" data-action="modal" data-modal="copy-target">${icon('clipboard')} เลือกจากที่จดไว้</button>` : ''}
+          <div class="lbl">แท็ก (สูงสุด 10) · <span class="gold">ควรเลือกประเภท 1 อย่าง: กายภาพ / เวท / แทงก์</span></div>
+          <div class="tag-pick">
+            ${tags.map((x) => html`<button type="button" class="tagbtn ${e.tags.includes(x) ? 'on' : ''}" data-action="tag-toggle" data-tag="${x}">${e.tags.includes(x) ? '✓' : '+'} ${x}</button>`)}
+            <input class="tag-in" placeholder="แท็กอื่น + Enter" data-tag-input />
+          </div>
+          <label>โน้ต <textarea rows="6" data-bind="note" placeholder="โน้ตบ้านศัตรู เช่น เจอบ่อยในกิลด์ X, ตัวหลังความเร็วสูง">${e.note}</textarea></label>
+        </div>
       </div>
-      <label>โน้ต <textarea rows="3" data-bind="note" placeholder="เช่น ความเร็วประมาณเท่าไร ต้องระวังอะไร">${e.note}</textarea></label>
     </div>
     <div class="sticky-actions"><a class="btn ghost" href="${id === 'new' ? '#/' : `#/t/${id}`}">ยกเลิก</a><button class="btn primary" data-action="save-target" data-id="${id}">บันทึก</button></div>`;
 }
@@ -812,7 +932,7 @@ function viewAdmin() {
       <form data-form="add-member" class="inline">
         <input name="discordId" placeholder="Discord User ID" required pattern="\\d{15,22}" />
         <input name="note" placeholder="ชื่อ (ไม่บังคับ)" />
-        <select name="role">${Object.entries(ROLE_LABEL).map(([k, v]) => html`<option value="${k}" ${k === 'editor' ? raw('selected') : ''}>${v}</option>`)}</select>
+        <select name="role">${Object.entries(ROLE_LABEL).map(([k, v]) => html`<option value="${k}" ${k === 'viewer' ? raw('selected') : ''}>${v}</option>`)}</select>
         <button class="btn primary">เพิ่มสมาชิก</button>
       </form>
       <div class="table-wrap"><table>
@@ -956,38 +1076,117 @@ function viewModal() {
       'รูปแบบการจัดทีม (Formation)',
       html`<div class="fmgrid">${[2, 3, 1, 4].map(
         (f) => html`<button type="button" class="fmopt ${team.front === f ? 'active' : ''}" data-action="set-formation" data-team="${m.team}" data-f="${f}">
-          ${formationDots(f)}<b>${team.front === f ? '✓ ' : ''}รูปแบบ${FORMATIONS[f]}</b><span class="muted small">หน้า ${f} · หลัง ${5 - f}</span>
+          <span class="orb fm-preview">${formationOrb(f)}</span><b>${team.front === f ? '✓ ' : ''}รูปแบบ${FORMATIONS[f]}</b><span class="muted small">หน้า ${f} · หลัง ${5 - f}</span>
         </button>`,
       )}</div>
-      <p class="muted small"><span class="blue">โล่น้ำเงิน</span> = แถวหน้า · <span class="red">หมุดแดง</span> = แถวหลัง</p>`,
+      <p class="muted small"><span class="blue">ดาวน้ำเงิน</span> = แถวหน้า · <span class="red">ดาวแดง</span> = แถวหลัง</p>`,
       'small',
     );
   }
 
-  if (m.kind === 'skills') {
-    const team = teamAt(m.team);
-    const skills = getPath(state.edit, m.skills);
-    const heroes = team.slots.map((n, i) => [n, i]).filter(([n]) => n);
+  if (m.kind === 'skills' || m.kind === 'skillview') {
+    const edit = m.kind === 'skills';
+    const ctx = edit ? { team: teamAt(m.team), skills: getPath(state.edit, m.skills) } : teamByKey(m.key);
+    if (!ctx) return '';
+    return wrap('ลำดับการใช้สกิล (Skill Queue)', skillQueue(ctx.team, ctx.skills, edit ? m.skills : null), 'medium');
+  }
+
+  if (m.kind === 'detail') {
+    const ctx = teamByKey(m.key);
+    if (!ctx) return '';
     return wrap(
-      'ลำดับการใช้สกิล',
-      html`<div class="sk-order">${[...Array(MAX_SKILLS).keys()].map((i) => {
-        const s = skills[i];
-        return s
-          ? html`<span class="sk-chip"><b>${i + 1}</b>${portrait(heroInfo(team.slots[s.slot]).img, 'ico')}${heroInfo(team.slots[s.slot]).base} · ${SKILL_LABEL[s.skill]}<button type="button" data-action="skill-del" data-path="${m.skills}" data-i="${i}" title="ลบ">×</button></span>`
-          : html`<span class="sk-chip empty"><b>${i + 1}</b>—</span>`;
-      })}</div>
-      <p class="muted small">แตะสกิลตามลำดับที่ต้องการใช้ (สูงสุด ${MAX_SKILLS})</p>
-      <div class="sk-heroes">${heroes.map(
-        ([n, i]) => html`<div class="sk-hero">${heroCard(n, { cls: 'mini' })}<div class="sk-btns">${[1, 2, ...(heroInfo(n).awake ? [3] : [])].map(
-          (k) => html`<button type="button" class="btn small" data-action="skill-push" data-path="${m.skills}" data-slot="${i}" data-skill="${k}" ${skills.length >= MAX_SKILLS ? raw('disabled') : ''}>${SKILL_LABEL[k]}</button>`,
-        )}</div></div>`,
-      )}</div>
-      ${heroes.length ? '' : html`<p class="muted center">ใส่อัศวินในทีมก่อน</p>`}
-      <div class="actions"><button type="button" class="btn ghost" data-action="skill-clear" data-path="${m.skills}">ล้าง</button><button type="button" class="btn primary" data-action="modal-close">เสร็จ</button></div>`,
+      `${ctx.title} · รายละเอียดทั้งทีม`,
+      html`<div class="detail-grid">
+        <div class="detail-board">${teamView(ctx.team, ctx.skills, { title: heroesOf(ctx.team).map(heroBase).join(' · '), tone: ctx.tone })}</div>
+        ${ctx.notes ? heroNotesView(ctx.notes) || html`<p class="muted center">ยังไม่ได้จดอุปกรณ์/ค่าความสามารถ</p>` : html`<p class="muted center">บ้านศัตรูไม่มีรายละเอียดอุปกรณ์</p>`}
+      </div>
+      <button type="button" class="btn primary block" data-action="modal-close">ปิดรายละเอียด</button>`,
+      'wide',
+    );
+  }
+
+  if (m.kind === 'speed') {
+    const ctx = teamByKey(m.key);
+    if (!ctx) return '';
+    const spd = (h) => (ctx.notes || []).find((n) => n.hero === h)?.stats?.spd;
+    const list = heroesOf(ctx.team).sort((a, b) => (spd(b) ?? -1) - (spd(a) ?? -1));
+    return wrap(
+      html`${icon('speed')} ความเร็วทีม <span class="gold">${ctx.team.speed || 0}</span>`,
+      html`<div class="muted small">ลำดับอัศวินตามความเร็วโจมตี</div>
+      <div class="speed-order">${list.map(
+        (h, i) => html`${i ? html`<span class="chev">›</span>` : ''}<div class="speed-item">${heroCard(h, { cls: 'sm' })}<b>${spd(h) ?? '—'}</b></div>`,
+      )}</div>`,
       'small',
     );
   }
+
+  if (m.kind === 'pick-gear') {
+    const map = m.gear === 'rings' ? AS.rings : AS.sets;
+    const names = Object.keys(map || {}).filter((n) => n !== 'แหวนแห่งการคีนชีพ');
+    const cur = getPath(state.edit, m.path) || [];
+    return wrap(
+      m.gear === 'rings' ? 'เลือกเครื่องประดับ' : 'เลือกเซตอุปกรณ์',
+      html`<div class="gear-grid">${names.map(
+        (n) => html`<button type="button" class="gear-opt ${cur[m.k] === n ? 'active' : ''}" data-action="set-gear" data-name="${n}"><img src="${map[n]}" alt="" /><span>${m.gear === 'sets' ? `ชุด${n}` : n}</span></button>`,
+      )}</div>
+      <div class="actions"><button type="button" class="btn danger" data-action="set-gear" data-name="">ล้างช่องนี้</button></div>`,
+      'medium',
+    );
+  }
+
+  if (m.kind === 'copy-target') {
+    return wrap(
+      'เลือกจากบ้านศัตรูที่จดไว้',
+      html`<div class="cards">${state.data.targets.map(
+        (t) => html`<button type="button" class="card copy-card" data-action="copy-target" data-id="${t.id}">${teamView(t.team)}<div class="card-foot">${t.tags.map((x) => html`<span class="tag">${x}</span>`)}</div></button>`,
+      )}</div>`,
+      'wide',
+    );
+  }
   return '';
+}
+
+// resolve a view key to { team, skills, notes, title }
+function teamByKey(key) {
+  const [kind, a, b, c] = key.split(':');
+  if (kind === 't') {
+    const t = findTarget(a);
+    return t && { team: t.team, skills: t.team.skills || [], notes: null, title: 'บ้านศัตรู', tone: 'enemy' };
+  }
+  if (kind === 'c') {
+    for (const t of state.data.targets) {
+      const i = t.counters.findIndex((x) => x.id === a);
+      if (i >= 0) return { team: t.counters[i].team, skills: t.counters[i].skills, notes: t.counters[i].heroNotes, title: `ทีมแก้ #${i + 1}` };
+    }
+  }
+  if (kind === 'p') {
+    const o = findPlan(a)?.data?.slots?.[b]?.options?.[c];
+    return o && { team: o.team || emptyTeam(), skills: o.skills || [], notes: o.heroNotes || [], title: `${findPlan(a).data.slots[b].name} · ตัวเลือก ${Number(c) + 1}` };
+  }
+  return null;
+}
+
+// skill queue: each hero with its skill icons; edit mode toggles skills in/out of the 3-step queue
+function skillQueue(team, skills, path) {
+  const heroes = team.slots.map((n, i) => [n, i]).filter(([n]) => n);
+  if (!heroes.length) return html`<p class="muted center">ใส่อัศวินในทีมก่อน</p>${path ? html`<button type="button" class="btn primary block" data-action="modal-close">เสร็จ</button>` : ''}`;
+  const orderOf = (slot, n) => skills.findIndex((s) => s.slot === slot && s.skill === n);
+  return html`<div class="sq-head"><span class="muted">ตั้งแล้ว ${skills.length}/${MAX_SKILLS}</span>${path ? html`<button type="button" class="btn small" data-action="skill-clear" data-path="${path}">${icon('reset')} รีเซต</button>` : ''}</div>
+    <div class="sq-heroes">${heroes.map(
+      ([n, slot]) => html`<div class="sq-hero">
+        <div class="sq-face">${portrait(heroInfo(n).img)}<span class="sq-ring"></span></div>
+        <div class="sq-skills">${skillsOf(n).map((s) => {
+          const o = orderOf(slot, s.n);
+          return html`<button type="button" class="sq-btn ${s.n === 3 ? 'awk' : ''} ${o >= 0 ? 'on' : ''}" title="${heroBase(n)} · สกิล${SKILL_LABEL[s.n]} · ${s.name}" ${path ? raw(`data-action="skill-toggle" data-path="${esc(path)}" data-slot="${slot}" data-skill="${s.n}"`) : raw('disabled')}>
+            ${s.img ? html`<img src="${s.img}" alt="" />` : html`<span>${SKILL_LABEL[s.n]}</span>`}
+            ${o >= 0 ? html`<em class="ord ${ORDER_CLASS[o]}">ลำดับ ${o + 1}</em>` : ''}
+          </button>`;
+        })}</div>
+        <div class="sq-name">${heroBase(n)}</div>
+      </div>`,
+    )}</div>
+    <p class="sq-summary">${skills.length ? skills.map((s, i) => `${i + 1}. ${heroBase(team.slots[s.slot] || '')} ${SKILL_LABEL[s.skill]}`).join('  →  ') : 'ยังไม่ได้ตั้งลำดับ'}</p>
+    <button type="button" class="btn primary block" data-action="modal-close">${path ? 'เสร็จ' : 'ปิด'}</button>`;
 }
 
 // ---------- router ----------
@@ -1050,7 +1249,7 @@ function render() {
   const focusQ = document.activeElement?.hasAttribute?.('data-dock-q') ? document.activeElement.selectionStart : null;
   const page = fmt(route());
   const dock = state.edit && !/\/c\/[\w-]+\/edit|\/c\/new/.test(location.hash) ? true : state.edit && state.step === 2;
-  $app.innerHTML = page + (dock ? fmt(viewDock()) : '') + (state.modal && state.edit ? fmt(viewModal()) : '');
+  $app.innerHTML = page + (dock ? fmt(viewDock()) : '') + (state.modal ? fmt(viewModal()) : '');
   document.body.classList.toggle('has-dock', !!dock);
   for (const [s, l, t] of keep) {
     const el = $app.querySelector(s);
@@ -1066,6 +1265,7 @@ addEventListener('hashchange', () => {
   state.activeTeam = null;
   state.modal = null;
   state.step = 2;
+  state.ci = 0;
   if (location.hash !== '#/admin') state.admin = null;
   render();
   scrollTo(0, 0);
@@ -1090,6 +1290,13 @@ const actions = {
     lock();
   },
   lock: () => lock(),
+  async 'admin-unlock'() {
+    await adminUnlock();
+    const next = sessionStorage.getItem(NEXT_KEY);
+    sessionStorage.removeItem(NEXT_KEY);
+    if (next && next !== location.hash) location.hash = next;
+    else render();
+  },
   share: (el) => copyLink(el.dataset.hash),
   // ----- team board -----
   slot(el) {
@@ -1163,6 +1370,49 @@ const actions = {
     getPath(state.edit, el.dataset.path).splice(0);
     render();
   },
+  'skill-toggle'(el) {
+    const skills = getPath(state.edit, el.dataset.path);
+    const slot = Number(el.dataset.slot);
+    const skill = Number(el.dataset.skill);
+    const i = skills.findIndex((s) => s.slot === slot && s.skill === skill);
+    if (i >= 0) skills.splice(i, 1);
+    else if (skills.length < MAX_SKILLS) skills.push({ slot, skill });
+    else toast(`ตั้งได้สูงสุด ${MAX_SKILLS} สกิล — กดสกิลที่ตั้งไว้เพื่อเอาออกก่อน`, true);
+    render();
+  },
+  'pick-gear'(el) {
+    state.modal = { kind: 'pick-gear', path: el.dataset.path, k: Number(el.dataset.k), gear: el.dataset.kind };
+    render();
+  },
+  'set-gear'(el) {
+    const m = state.modal;
+    const list = getPath(state.edit, m.path);
+    const next = [...list];
+    next[m.k] = el.dataset.name || null;
+    // keep the list compact (no gaps) and unique
+    const out = [...new Set(next.filter(Boolean))];
+    list.splice(0, list.length, ...out);
+    state.modal = null;
+    render();
+  },
+  'copy-target'(el) {
+    const t = findTarget(el.dataset.id);
+    if (t && state.edit) {
+      state.edit.team = clone(t.team);
+      state.edit.skills = clone(t.team.skills || []);
+      delete state.edit.team.skills;
+      state.sel = null;
+    }
+    state.modal = null;
+    render();
+  },
+  'counter-tab'(el) {
+    state.ci = el.dataset.i === 'all' ? 'all' : Number(el.dataset.i);
+    render();
+  },
+  'open-detail': (el) => ((state.modal = { kind: 'detail', key: el.dataset.key }), render()),
+  'open-skillview': (el) => ((state.modal = { kind: 'skillview', key: el.dataset.key }), render()),
+  'open-speed': (el) => ((state.modal = { kind: 'speed', key: el.dataset.key }), render()),
   // ----- dock -----
   'dock-pick'(el) {
     const prefix = state.sel?.team || state.activeTeam;
@@ -1385,7 +1635,7 @@ document.addEventListener('keydown', (ev) => {
     ev.preventDefault();
     return ev.target.click();
   }
-  if (ev.key !== 'Escape' || !state.edit) return;
+  if (ev.key !== 'Escape') return;
   if (state.modal) actions['modal-close']();
   else if (state.sel) (state.sel = null), render();
 });

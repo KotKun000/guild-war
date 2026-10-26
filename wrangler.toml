@@ -13,7 +13,7 @@ DISCORD_SERVER_ID = ""
 # Optional: also require this role inside DISCORD_SERVER_ID
 DISCORD_ROLE_ID = ""
 # Role given to members auto-approved via DISCORD_SERVER_ID: viewer | editor
-DEFAULT_ROLE = "editor"
+DEFAULT_ROLE = "viewer"
 # Minutes an unlock (guild password) stays valid while the tab is open
 UNLOCK_MINUTES = "120"
 

@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS members (
   role TEXT NOT NULL DEFAULT 'viewer',
   status TEXT NOT NULL DEFAULT 'active',
   created_at INTEGER NOT NULL,
-  last_seen INTEGER
+  last_seen INTEGER,
+  mfa INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sessions (

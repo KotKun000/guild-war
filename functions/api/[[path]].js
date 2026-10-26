@@ -36,20 +36,30 @@ const publicMember = (m) => ({
   avatar: m.avatar ? `https://cdn.discordapp.com/avatars/${m.discord_id}/${m.avatar}.png?size=64` : null,
   role: m.role,
   status: m.status,
+  mfa: !!m.mfa,
   lastSeen: m.last_seen,
   createdAt: m.created_at,
 });
+
+// Admins whose Discord account has 2FA may skip the guild password, so a password change can never lock every admin out.
+const canBypass = (m) => m.role === 'admin' && !!m.mfa;
 
 // ---------- auth / password ----------
 
 on('GET', '/me', { unlock: false }, async ({ env, ctx }) => ({
   user: publicMember(ctx.member),
   passwordSet: !!(await getSetting(env, 'pw_hash')),
+  bypass: canBypass(ctx.member),
 }));
 
 on('POST', '/unlock', { unlock: false }, async ({ env, request, ctx, body }) => {
   const id = ctx.member.discord_id;
   const now = Date.now();
+  if (body.bypass) {
+    if (!canBypass(ctx.member)) throw new HttpError(403, 'bypass_not_allowed');
+    await audit(env, request, id, 'unlock_bypass', 'admin + Discord 2FA');
+    return issueUnlock(env, ctx.member, ctx.sessionHash);
+  }
   const att = (await env.DB.prepare('SELECT * FROM login_attempts WHERE discord_id = ?').bind(id).first()) || { fails: 0, locked_until: 0 };
   if (att.locked_until > now) throw new HttpError(429, `locked_until:${att.locked_until}`);
 
@@ -227,7 +237,7 @@ on('GET', '/members', { role: 'admin' }, async ({ env }) => {
 on('POST', '/members', { role: 'admin' }, async ({ env, request, ctx, body }) => {
   const id = String(body.discordId || '').trim();
   if (!/^\d{15,22}$/.test(id)) throw new HttpError(400, 'invalid_discord_id');
-  const role = ROLES.includes(body.role) ? body.role : 'editor';
+  const role = ROLES.includes(body.role) ? body.role : 'viewer';
   await env.DB.prepare(
     `INSERT INTO members (discord_id, username, role, status, created_at) VALUES (?, ?, ?, 'active', ?)
      ON CONFLICT(discord_id) DO UPDATE SET role = excluded.role, status = 'active'`,

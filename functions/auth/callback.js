@@ -56,16 +56,16 @@ export async function onRequestGet({ request, env }) {
       await audit(env, request, user.id, 'login_denied', `${user.username} not whitelisted`);
       return fail('denied');
     }
-    role = env.DEFAULT_ROLE === 'viewer' ? 'viewer' : 'editor';
+    role = env.DEFAULT_ROLE === 'editor' ? 'editor' : 'viewer';
   }
 
   await env.DB.prepare(
-    `INSERT INTO members (discord_id, username, global_name, avatar, role, status, created_at, last_seen)
-     VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+    `INSERT INTO members (discord_id, username, global_name, avatar, role, status, created_at, last_seen, mfa)
+     VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
      ON CONFLICT(discord_id) DO UPDATE SET username = excluded.username, global_name = excluded.global_name,
-       avatar = excluded.avatar, role = excluded.role, status = 'active', last_seen = excluded.last_seen`,
+       avatar = excluded.avatar, role = excluded.role, status = 'active', last_seen = excluded.last_seen, mfa = excluded.mfa`,
   )
-    .bind(user.id, user.username, user.global_name || null, user.avatar || null, role, now, now)
+    .bind(user.id, user.username, user.global_name || null, user.avatar || null, role, now, now, user.mfa_enabled ? 1 : 0)
     .run();
 
   const token = await createSession(env, user.id);

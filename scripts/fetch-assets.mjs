@@ -9,9 +9,31 @@ const BASE = 'https://7katlas.com/';
 const OUT = path.resolve('public');
 const FORCE = process.argv.includes('--force');
 const SIZE = 128;
-// hero cards are tall like in-game cards
-const HERO_W = 112;
-const HERO_H = 140;
+// square hero art; the site zooms into the face with CSS like the in-game cards
+const HERO_W = 160;
+const HERO_H = 160;
+// Ring / skill / stat / set icons (keyed by the same Thai names as our data) come from 7K Note
+const NOTE_BASE = 'https://7k-note.pages.dev';
+// our stat keys -> 7K Note stat icon stem
+const STAT_ICONS = {
+  atk: 'PATK',
+  def: 'DEF',
+  hp: 'HP',
+  spd: 'Speed',
+  critRate: 'Crit',
+  critDmg: 'CritDMG',
+  weak: 'WeaknessHit',
+  block: 'Block',
+  hit: 'EffectHit',
+  resist: 'EffectRes',
+  dtr: 'DmgTakenReduce',
+  amp: 'DMGAmp',
+  crush: 'Crush',
+  resil: 'Resilience',
+  rejuv: 'Rejuvenate',
+};
+// spellings used in our data -> 7K Note file spelling
+const RING_FILE_ALIASES = { แหวนแห่งการคืนชีพ: 'แหวนแห่งการคีนชีพ' };
 const TYPE_ICONS = {
   Attack: 'RoleIcon_Type01_Attack',
   Magic: 'RoleIcon_Type02_Magic',
@@ -43,12 +65,6 @@ const SETS = {
   อัศวินศักดิ์สิทธิ์: 'Paladin',
 };
 
-// Thai ring name -> 7K Atlas accessory icon (tier/key). Only mappings we are sure about; others render as text.
-const RINGS = {
-  แหวนอมตะ: 'L/Immortal',
-  แหวนแห่งการคืนชีพ: 'L/Revive',
-  แหวนแห่งความตาย: 'UC/Death',
-};
 
 const RARITY_ORDER = ['L++', 'L+', 'L', 'R', 'UC', 'C'];
 
@@ -101,6 +117,88 @@ async function pool(items, n, fn) {
   return out;
 }
 
+async function downloadAbs(url, dest, size) {
+  const file = path.join(OUT, dest);
+  if (FORCE || !(await exists(file))) {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn(`  ! ${res.status} ${url}`);
+      return null;
+    }
+    await mkdir(path.dirname(file), { recursive: true });
+    const buf = Buffer.from(await res.arrayBuffer());
+    await writeFile(file, await sharp(buf).resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).webp({ quality: 85 }).toBuffer());
+  }
+  return '/' + dest.replace(/\\/g, '/');
+}
+
+// Pull icon tables out of the 7K Note bundle: hero -> skills [{file, name}] (order: ล่าง, บน, อเวค) + hashed asset URLs
+async function fetchNoteAssets() {
+  const html = await (await fetch(NOTE_BASE + '/')).text();
+  const entry = html.match(/\/assets\/index-[\w-]+\.js/)[0];
+  const js = await (await fetch(NOTE_BASE + entry)).text();
+  const urls = [...new Set([...js.matchAll(/"(\/assets\/[^"]+\.webp)"/g)].map((m) => m[1]))];
+  const urlFor = (stem) => urls.find((u) => decodeURIComponent(u).split('/').pop().startsWith(stem + '-'));
+
+  // the skills table is the object literal whose values look like [{file:"Tex_Skill_...",name:"..."}]
+  const marker = js.search(/=\{"?[^"{}=]{1,40}"?:\[\{file:"Tex_Skill_/);
+  if (marker < 0) throw new Error('7K Note skill table not found');
+  let depth = 0;
+  let end = marker + 1;
+  for (; end < js.length; end++) {
+    if (js[end] === '{') depth++;
+    else if (js[end] === '}' && --depth === 0) break;
+  }
+  const table = new Function(`return ${js.slice(marker + 1, end + 1)}`)();
+
+  const skills = {};
+  await pool(Object.entries(table), 8, async ([hero, list]) => {
+    skills[hero] = [];
+    for (const s of list || []) {
+      if (!s?.file) {
+        skills[hero].push(null);
+        continue;
+      }
+      const stem = s.file.replace(/\.webp$/, '');
+      const u = urlFor(stem);
+      skills[hero].push({ name: s.name, kind: stem.slice(-2), img: u ? await downloadAbs(NOTE_BASE + u, `img/skills/${stem}.webp`, 64) : null });
+    }
+  });
+
+  const rings = {};
+  for (const u of urls.filter((x) => decodeURIComponent(x).includes('/ring-'))) {
+    const th = decodeURIComponent(u).split('/ring-').pop().replace(/-[\w-]{8}\.webp$/, '');
+    const i = Object.keys(rings).length;
+    rings[th] = await downloadAbs(NOTE_BASE + u, `img/rings/r${String(i).padStart(2, '0')}.webp`, 64);
+  }
+  for (const [ours, theirs] of Object.entries(RING_FILE_ALIASES)) if (rings[theirs]) rings[ours] = rings[theirs];
+
+  const sets = {};
+  for (const [th, stem] of Object.entries(SETS)) {
+    const u = urlFor(`set-${stem}`);
+    if (u) sets[th] = await downloadAbs(NOTE_BASE + u, `img/sets/${stem}.webp`, 64);
+  }
+
+  const stats = {};
+  for (const [key, stem] of Object.entries(STAT_ICONS)) {
+    const u = urlFor(stem);
+    if (u) stats[key] = await downloadAbs(NOTE_BASE + u, `img/stats/${stem}.webp`, 40);
+  }
+
+  // the awakening badge is inlined as a data URI right after the first `="data:image/webp;base64,` that precedes the awake portrait code
+  let awakeBadge = null;
+  const awk = js.match(/src:(\w+),alt:(?:\w+\()?"อเวค"/) || js.match(/alt:(?:\w+\()?"อเวค"[^}]*?src:(\w+)/);
+  const varName = awk?.[1];
+  const dataUri = varName && js.match(new RegExp(`${varName}="(data:image\\/webp;base64,[A-Za-z0-9+/=]+)"`))?.[1];
+  if (dataUri) {
+    await mkdir(path.join(OUT, 'img'), { recursive: true });
+    await writeFile(path.join(OUT, 'img/awake.webp'), Buffer.from(dataUri.split(',')[1], 'base64'));
+    awakeBadge = '/img/awake.webp';
+  }
+  console.log(`7K Note: ${Object.keys(skills).length} heroes with skills, ${Object.keys(rings).length} rings, ${Object.keys(sets).length} sets, ${Object.keys(stats).length} stats, awake badge: ${!!awakeBadge}`);
+  return { skills, rings, sets, stats, awakeBadge };
+}
+
 const best = (p) => p?.s6 || p?.s5 || p?.s4 || p?.s3 || null;
 const lastWord = (s) => (s && s.includes(' ') ? s.split(' ').pop() : null);
 
@@ -132,10 +230,7 @@ async function main() {
     return { id: p.id, name: aliases[0], en: p.name, rarity: p.rarity, aliases: [...new Set(aliases)], img: await download(p.icon, `img/pets/${p.id}.webp`) };
   });
 
-  const sets = {};
-  for (const [th, stem] of Object.entries(SETS)) sets[th] = await download(`images/gears/seticons/${stem}.webp`, `img/sets/${stem}.webp`, 48);
-  const rings = {};
-  for (const [th, key] of Object.entries(RINGS)) rings[th] = await download(`images/gears/acc/${key}.webp`, `img/rings/${key.split('/')[1]}.webp`, 48);
+  const note = await fetchNoteAssets();
 
   const types = {};
   for (const [t, file] of Object.entries(TYPE_ICONS)) types[t] = await download(`images/classification/${file}.webp`, `img/types/${t}.webp`, 40);
@@ -144,16 +239,15 @@ async function main() {
   const byRarity = (a, b) =>
     RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity) || (b.released || '').localeCompare(a.released || '') || a.name.localeCompare(b.name, 'th');
   const assets = {
-    source: '7K Atlas — https://7katlas.com',
+    source: 'Heroes/pets/types: 7K Atlas (7katlas.com) · skills/rings/sets/stats: 7K Note (7k-note.pages.dev)',
     updatedAt: new Date().toISOString(),
     heroes: heroOut.filter((h) => h.img).sort(byRarity),
     pets: petOut.filter((p) => p.img).sort(byRarity),
-    sets,
-    rings,
     types,
+    ...note,
   };
   await writeFile(path.join(OUT, 'assets.json'), JSON.stringify(assets));
-  console.log(`wrote public/assets.json: ${assets.heroes.length} heroes, ${assets.pets.length} pets, ${Object.keys(sets).length} sets, ${Object.keys(rings).length} rings`);
+  console.log(`wrote public/assets.json: ${assets.heroes.length} heroes, ${assets.pets.length} pets`);
 }
 
 main().catch((e) => {
