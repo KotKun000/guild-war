@@ -1,0 +1,1 @@
+await import("/app.js");await new Promise(r=>setTimeout(r,500));const f=document.querySelector("[data-form=unlock]");f.password.value="x";f.requestSubmit();

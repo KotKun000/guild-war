@@ -664,3 +664,51 @@ body.has-dock main { padding-bottom: 200px; }
   .fgrid { grid-template-columns: repeat(2, 1fr); }
   body.has-dock main { padding-bottom: 220px; }
 }
+
+/* ---------- enemy house list (7K Note style) ---------- */
+:root { --tag-phys: #e5484d; --tag-magic: #3e8ef7; --tag-tank: #d0892f; --tag-sub: #2fb57a; }
+.search-box { position: relative; display: flex; align-items: center; flex: 1; min-width: 220px; margin: 0; }
+.search-box svg { position: absolute; left: 14px; color: var(--muted); }
+.search-box input { margin: 0; padding: 10px 14px 10px 40px; border-radius: 999px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip-btn { padding: 5px 14px; border-radius: 999px; border: 1px solid var(--line2); background: var(--bg2); color: var(--text); font: inherit; font-size: 0.85rem; cursor: pointer; }
+.chip-btn:hover { border-color: var(--gold2); }
+.chip-btn.on { border-color: var(--gold); color: var(--gold); background: var(--gold-soft); }
+.chip-btn.tt-phys.on { border-color: var(--tag-phys); color: #ffb3b5; background: rgba(229, 72, 77, 0.15); }
+.chip-btn.tt-magic.on { border-color: var(--tag-magic); color: #b6d3ff; background: rgba(62, 142, 247, 0.15); }
+.chip-btn.tt-tank.on { border-color: var(--tag-tank); color: #ffd39a; background: rgba(208, 137, 47, 0.15); }
+
+.tag.tt-phys, .tag.tt-magic, .tag.tt-tank, .tag.tt-sub {
+  color: #fff; font-weight: 600; border: 1px solid rgba(255, 255, 255, 0.35); text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+.tag.tt-phys { background: linear-gradient(180deg, #ef6a6e, #c3343a); }
+.tag.tt-magic { background: linear-gradient(180deg, #5ea2fb, #2a6fd0); }
+.tag.tt-tank { background: linear-gradient(180deg, #e3a04e, #a86617); }
+.tag.tt-sub { background: linear-gradient(180deg, #45c98f, #1f8d5c); }
+.note-card .tag.tt-phys { border-color: #ff9a9d; }
+
+.tcard { padding: 12px 12px 14px; border-width: 2px; display: flex; flex-direction: column; gap: 10px; }
+.tcard.tc-phys { border-color: color-mix(in srgb, var(--tag-phys) 75%, transparent); }
+.tcard.tc-magic { border-color: color-mix(in srgb, var(--tag-magic) 75%, transparent); }
+.tcard.tc-tank { border-color: color-mix(in srgb, var(--tag-tank) 75%, transparent); }
+.tcard:hover { transform: translateY(-2px); }
+.tcard .board { border: none; background: transparent; padding: 0; }
+.tcard .board::before, .tcard .board::after { display: none; }
+.tc-head { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.tc-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-right: auto; }
+.tc-head .count { margin-left: 0; color: var(--muted); }
+.ago { display: inline-flex; align-items: center; gap: 5px; font-size: 0.78rem; color: var(--muted); white-space: nowrap; }
+.ago i { width: 7px; height: 7px; border-radius: 50%; background: #5d6681; }
+.ago.fresh i { background: #2fd18a; box-shadow: 0 0 6px rgba(47, 209, 138, 0.8); }
+
+/* type tag picker */
+.tagbtn.type { border-style: solid; font-weight: 600; }
+.tagbtn.type.tt-phys.on { background: linear-gradient(180deg, #ef6a6e, #c3343a); border-color: #ff9a9d; color: #fff; }
+.tagbtn.type.tt-magic.on { background: linear-gradient(180deg, #5ea2fb, #2a6fd0); border-color: #9cc4ff; color: #fff; }
+.tagbtn.type.tt-tank.on { background: linear-gradient(180deg, #e3a04e, #a86617); border-color: #ffc983; color: #fff; }
+
+/* empty slot when the team already has 3 heroes */
+.ucard.empty.blocked { background: linear-gradient(160deg, #4a1d27, #2a1119); border-color: #7a2c3a; color: #ff6b7d; display: grid; place-items: center; }
+.blocked-svg { width: 62%; height: 62%; }
+.blocked-svg path { stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
+.blocked-svg circle { fill: currentColor; }

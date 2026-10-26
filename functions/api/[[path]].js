@@ -193,15 +193,28 @@ on('POST', '/targets/:id/counters', { role: 'editor' }, async ({ env, ctx, body,
 
 on('PUT', '/counters/:id', { role: 'editor' }, async ({ env, body, params }) => {
   const s = S.counter(body);
-  const r = await env.DB.prepare('UPDATE counters SET team = ?, skills = ?, hero_notes = ?, note = ?, updated_at = ? WHERE id = ?')
-    .bind(JSON.stringify(s.team), JSON.stringify(s.skills), JSON.stringify(s.heroNotes), s.note, Date.now(), params.id)
-    .run();
+  const now = Date.now();
+  const [r] = await env.DB.batch([
+    env.DB.prepare('UPDATE counters SET team = ?, skills = ?, hero_notes = ?, note = ?, updated_at = ? WHERE id = ?').bind(
+      JSON.stringify(s.team),
+      JSON.stringify(s.skills),
+      JSON.stringify(s.heroNotes),
+      s.note,
+      now,
+      params.id,
+    ),
+    touchTargetOf(env, params.id, now),
+  ]);
   if (!r.meta.changes) throw new HttpError(404, 'not_found');
   return { ok: true };
 });
 
+// bump the enemy house's "last updated" time when one of its counters changes
+const touchTargetOf = (env, counterId, now) =>
+  env.DB.prepare('UPDATE targets SET updated_at = ? WHERE id = (SELECT target_id FROM counters WHERE id = ?)').bind(now, counterId);
+
 on('DELETE', '/counters/:id', { role: 'editor' }, async ({ env, request, ctx, params }) => {
-  await env.DB.prepare('DELETE FROM counters WHERE id = ?').bind(params.id).run();
+  await env.DB.batch([touchTargetOf(env, params.id, Date.now()), env.DB.prepare('DELETE FROM counters WHERE id = ?').bind(params.id)]);
   await audit(env, request, ctx.member.discord_id, 'counter_delete', params.id);
   return { ok: true };
 });

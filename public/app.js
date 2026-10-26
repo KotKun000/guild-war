@@ -97,7 +97,41 @@ const ICONS = {
 const icon = (name, cls = '') =>
   raw(`<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`);
 const IDLE_LOCK_MS = 30 * 60e3;
-const TAG_PRESETS = ['เวท', 'กายภาพ', 'แทงก์', 'ความเร็ว', 'ต้องการของดี'];
+// every enemy house has exactly one type tag; other tags are secondary (max 5)
+const TYPE_TAGS = ['กายภาพ', 'เวท', 'แทงก์'];
+const TYPE_CLASS = { กายภาพ: 'phys', เวท: 'magic', แทงก์: 'tank' };
+const TAG_ALIASES = { โจมตี: 'กายภาพ', เวทย์: 'เวท', ถึก: 'แทงก์' }; // older tag names in imported data
+const SECONDARY_PRESETS = ['ความเร็ว', 'ต้องการของดี'];
+const MAX_SECONDARY = 5;
+const normTags = (tags) => [...new Set((tags || []).map((x) => TAG_ALIASES[x] || x))];
+const typeTagOf = (tags) => normTags(tags).find((x) => TYPE_TAGS.includes(x));
+const tagPill = (x) => html`<span class="tag ${TYPE_CLASS[x] ? `tt-${TYPE_CLASS[x]}` : 'tt-sub'}">${x}</span>`;
+// type tag first, then secondary tags
+const sortedTags = (tags) => normTags(tags).sort((a, b) => TYPE_TAGS.includes(b) - TYPE_TAGS.includes(a));
+
+// type tags behave like radio buttons; secondary tags are capped at MAX_SECONDARY
+function toggleTag(t) {
+  const tags = state.edit.tags;
+  if (tags.includes(t)) return tags.splice(tags.indexOf(t), 1);
+  if (TYPE_TAGS.includes(t)) {
+    const old = tags.findIndex((x) => TYPE_TAGS.includes(x));
+    if (old >= 0) tags.splice(old, 1);
+    return tags.unshift(t);
+  }
+  if (tags.filter((x) => !TYPE_TAGS.includes(x)).length >= MAX_SECONDARY) return toast(`แท็กรองได้สูงสุด ${MAX_SECONDARY} อัน`, true);
+  tags.push(t);
+}
+
+function timeAgo(ts) {
+  const s = Math.max(0, (Date.now() - ts) / 1000);
+  if (s < 60) return 'เมื่อครู่';
+  if (s < 3600) return `${Math.floor(s / 60)} นาที`;
+  if (s < 86400) return `${Math.floor(s / 3600)} ชม.`;
+  if (s < 30 * 86400) return `${Math.floor(s / 86400)} วัน`;
+  return new Date(ts).toLocaleDateString('th-TH', { dateStyle: 'short' });
+}
+const agoBadge = (ts) =>
+  html`<span class="ago ${Date.now() - ts < 86400e3 ? 'fresh' : ''}" title="แก้ไขล่าสุด ${fmtDate(ts)}"><i></i>${timeAgo(ts)}</span>`;
 const NEXT_KEY = 'egg2k:next';
 
 // Unlock token is kept in memory only: reloading / closing the tab always asks for the password again.
@@ -352,7 +386,13 @@ function skillOrb(count) {
 }
 
 // orders: skill-queue positions (0-based) that belong to this hero
-function heroCard(name, { cls = '', attrs = raw(''), orders = [] } = {}) {
+const BLOCKED_SVG = raw(
+  '<svg viewBox="0 0 100 100" class="blocked-svg" aria-hidden="true"><path d="M15 85 85 15"/><circle cx="15" cy="85" r="3.5"/><circle cx="85" cy="15" r="3.5"/></svg>',
+);
+
+// blocked = team already has MAX_HEROES, this empty slot cannot take another hero
+function heroCard(name, { cls = '', attrs = raw(''), orders = [], blocked = false } = {}) {
+  if (!name && blocked) return html`<div class="ucard empty blocked ${cls}" ${attrs} title="ทีมครบ ${MAX_HEROES} ตัวแล้ว">${BLOCKED_SVG}</div>`;
   if (!name) return html`<div class="ucard empty ${cls}" ${attrs}><span class="plus">+</span></div>`;
   const info = heroInfo(name);
   const h = AS.hero.get(info.base);
@@ -380,8 +420,10 @@ function board(team, skills, title = '', edit = null, { view = null, mirror = fa
   const act = (action, extra = '') => (edit ? raw(`role="button" tabindex="0" data-action="${action}" data-team="${esc(edit.prefix)}" ${extra}`) : raw(''));
   const viewAct = (action) => (view ? raw(`role="button" tabindex="0" data-action="${action}" data-key="${esc(view.key)}"`) : raw(''));
   const ordersOf = (i) => skills.map((s, o) => (s.slot === i ? o : -1)).filter((o) => o >= 0);
+  const full = heroesOf(team).length >= MAX_HEROES;
   const slot = (i) =>
     html`<div class="slot-wrap">${heroCard(team.slots[i], {
+      blocked: full,
       cls: isSel('slots', i) ? 'selected' : '',
       attrs: edit ? act('slot', `data-field="slots" data-i="${i}"`) : team.slots[i] ? viewAct('open-detail') : raw(''),
       orders: ordersOf(i),
@@ -650,22 +692,25 @@ function viewUnlock() {
 }
 
 function targetCard(t) {
-  return html`<a class="card" href="#/t/${t.id}">
-    ${teamView(t.team)}
-    <div class="card-foot">
-      ${t.tags.map((x) => html`<span class="tag">${x}</span>`)}
-      <span class="count">${icon('shield')} ${t.counters.length} ทีมแก้</span>
+  const type = typeTagOf(t.tags);
+  return html`<a class="card tcard ${type ? `tc-${TYPE_CLASS[type]}` : ''}" href="#/t/${t.id}">
+    <div class="tc-head">
+      <div class="tc-tags">${sortedTags(t.tags).map(tagPill)}</div>
+      ${agoBadge(t.updatedAt)}
+      <span class="count">${icon('swords')} ${t.counters.length} ทีมแก้</span>
     </div>
+    ${teamView(t.team)}
   </a>`;
 }
 
 function viewTargets() {
   const q = state.q.trim().toLowerCase();
-  const names = allNames();
+  const used = new Set(state.data.targets.flatMap((t) => normTags(t.tags)));
+  const chips = [...TYPE_TAGS, ...SECONDARY_PRESETS.filter((x) => used.has(x)), ...[...used].filter((x) => !TYPE_TAGS.includes(x) && !SECONDARY_PRESETS.includes(x)).sort()];
   const list = state.data.targets.filter((t) => {
-    if (state.tag && !t.tags.includes(state.tag)) return false;
+    if (state.tag && !normTags(t.tags).includes(state.tag)) return false;
     if (!q) return true;
-    const hay = [...heroesOf(t.team), t.team.pet, ...t.tags, t.note].join(' ').toLowerCase();
+    const hay = [...heroesOf(t.team), t.team.pet, ...normTags(t.tags), t.note].join(' ').toLowerCase();
     return q.split(/\s+/).every((w) => hay.includes(w));
   });
   return html`${homeTop('targets')}
@@ -674,8 +719,11 @@ function viewTargets() {
       ${can('editor') ? html`<a class="btn primary" href="#/new">${icon('plus')} เพิ่มบ้านศัตรู</a>` : ''}
     </div>
     <div class="filters">
-      <input class="search" type="search" placeholder="ค้นหาฮีโร่ / สัตว์เลี้ยง / แท็ก" value="${state.q}" data-filter="q" list="dl-heroes" />
-      <select data-filter="tag"><option value="">ทุกแท็ก</option>${names.tags.map((x) => html`<option ${state.tag === x ? raw('selected') : ''}>${x}</option>`)}</select>
+      <label class="search-box">${icon('search')}<input type="search" placeholder="ค้นหาชื่ออัศวิน, โน้ต, แท็ก..." value="${state.q}" data-filter="q" list="dl-heroes" /></label>
+      <div class="chips">
+        <button type="button" class="chip-btn ${state.tag ? '' : 'on'}" data-action="tag-filter" data-tag="">ทั้งหมด</button>
+        ${chips.map((x) => html`<button type="button" class="chip-btn ${TYPE_CLASS[x] ? `tt-${TYPE_CLASS[x]}` : ''} ${state.tag === x ? 'on' : ''}" data-action="tag-filter" data-tag="${x}">${x}</button>`)}
+      </div>
     </div>
     ${datalists()}
     ${list.length
@@ -730,8 +778,8 @@ function viewTarget(id) {
         <div class="notes-row">
           ${c ? counterNote(c, ci) : ''}
           <div class="panel frame note-card enemy">
-            <div class="note-head"><b>บ้านศัตรู</b><span class="muted small">อัปเดต ${fmtDate(t.updatedAt)}</span></div>
-            ${t.tags.length ? html`<div class="tags">${t.tags.map((x) => html`<span class="tag">${x}</span>`)}</div>` : ''}
+            <div class="note-head"><b>บ้านศัตรู</b>${agoBadge(t.updatedAt)}</div>
+            ${t.tags.length ? html`<div class="tags">${sortedTags(t.tags).map(tagPill)}</div>` : ''}
             ${t.note ? html`<div class="pre">${t.note}</div>` : html`<p class="muted">ไม่มีโน้ต</p>`}
           </div>
         </div>`}`;
@@ -742,21 +790,27 @@ function viewTargetEdit(id) {
     const t = id === 'new' ? null : findTarget(id);
     if (id !== 'new' && !t) return html`<p class="center muted">ไม่พบทีม</p>`;
     const team = t ? clone(t.team) : emptyTeam();
-    state.edit = { __key: `t:${id}`, team, skills: team.skills || [], tags: t ? [...t.tags] : [], note: t?.note || '' };
+    state.edit = { __key: `t:${id}`, team, skills: team.skills || [], tags: t ? normTags(t.tags) : [], note: t?.note || '' };
   }
   const e = state.edit;
   syncTeam(e.team, e.skills);
-  const tags = [...new Set([...TAG_PRESETS, ...allNames().tags, ...e.tags])];
+  const used = state.data.targets.flatMap((t) => normTags(t.tags));
+  const secondary = [...new Set([...SECONDARY_PRESETS, ...used, ...e.tags])].filter((x) => !TYPE_TAGS.includes(x));
+  const nSec = e.tags.filter((x) => !TYPE_TAGS.includes(x)).length;
   return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id === 'new' ? '#/' : `#/t/${id}`}">${icon('back')} ยกเลิก</a><h2>${id === 'new' ? 'เพิ่มบ้านศัตรู' : 'แก้ไขบ้านศัตรู'}</h2></div>
     <div class="edit-2col">
       <div><h3 class="side-title enemy-title">${id === 'new' ? 'บ้านศัตรูใหม่' : 'บ้านศัตรู'}</h3>${teamEditor('team', e.team, e.skills, 'skills', null, null, '')}</div>
       <div><h3 class="side-title enemy-title">รายละเอียดบ้านศัตรู</h3>
         <div class="panel frame">
           ${state.data.targets.length ? html`<button type="button" class="btn small" data-action="modal" data-modal="copy-target">${icon('clipboard')} เลือกจากที่จดไว้</button>` : ''}
-          <div class="lbl">แท็ก (สูงสุด 10) · <span class="gold">ควรเลือกประเภท 1 อย่าง: กายภาพ / เวท / แทงก์</span></div>
+          <div class="lbl">ประเภทบ้าน · <span class="${typeTagOf(e.tags) ? 'muted' : 'gold'}">ต้องเลือก 1 อย่าง: กายภาพ / เวท / แทงก์</span></div>
           <div class="tag-pick">
-            ${tags.map((x) => html`<button type="button" class="tagbtn ${e.tags.includes(x) ? 'on' : ''}" data-action="tag-toggle" data-tag="${x}">${e.tags.includes(x) ? '✓' : '+'} ${x}</button>`)}
-            <input class="tag-in" placeholder="แท็กอื่น + Enter" data-tag-input />
+            ${TYPE_TAGS.map((x) => html`<button type="button" class="tagbtn type tt-${TYPE_CLASS[x]} ${e.tags.includes(x) ? 'on' : ''}" data-action="tag-toggle" data-tag="${x}">${e.tags.includes(x) ? '✓' : ''} ${x}</button>`)}
+          </div>
+          <div class="lbl">แท็กรอง (สูงสุด ${MAX_SECONDARY}) · <span class="muted">${nSec}/${MAX_SECONDARY}</span></div>
+          <div class="tag-pick">
+            ${secondary.map((x) => html`<button type="button" class="tagbtn ${e.tags.includes(x) ? 'on' : ''}" data-action="tag-toggle" data-tag="${x}">${e.tags.includes(x) ? '✓' : '+'} ${x}</button>`)}
+            ${nSec < MAX_SECONDARY ? html`<input class="tag-in" placeholder="แท็กอื่น + Enter" data-tag-input />` : ''}
           </div>
           <label>โน้ต <textarea rows="6" data-bind="note" placeholder="โน้ตบ้านศัตรู เช่น เจอบ่อยในกิลด์ X, ตัวหลังความเร็วสูง">${e.note}</textarea></label>
         </div>
@@ -1449,9 +1503,11 @@ const actions = {
     render();
   },
   'tag-toggle'(el) {
-    const tags = state.edit.tags;
-    const t = el.dataset.tag;
-    tags.includes(t) ? tags.splice(tags.indexOf(t), 1) : tags.length < 10 && tags.push(t);
+    toggleTag(el.dataset.tag);
+    render();
+  },
+  'tag-filter'(el) {
+    state.tag = el.dataset.tag;
     render();
   },
   step(el) {
@@ -1464,7 +1520,8 @@ const actions = {
     const id = el.dataset.id;
     const e = state.edit;
     if (!heroesOf(e.team).length) return toast('ใส่ฮีโร่อย่างน้อย 1 ตัว', true);
-    const body = { team: { ...e.team, skills: e.skills }, tags: e.tags, note: e.note };
+    if (!typeTagOf(e.tags)) return toast('เลือกประเภทบ้าน 1 อย่าง: กายภาพ / เวท / แทงก์', true);
+    const body = { team: { ...e.team, skills: e.skills }, tags: sortedTags(e.tags), note: e.note };
     const r = id === 'new' ? await api('POST', '/targets', body) : await api('PUT', `/targets/${id}`, body);
     toast('บันทึกแล้ว');
     await refresh(`#/t/${id === 'new' ? r.id : id}`);
@@ -1626,8 +1683,8 @@ document.addEventListener('input', (ev) => {
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && ev.target.hasAttribute?.('data-tag-input')) {
     ev.preventDefault();
-    const t = ev.target.value.trim().slice(0, 20);
-    if (t && state.edit && !state.edit.tags.includes(t) && state.edit.tags.length < 10) state.edit.tags.push(t);
+    const t = normTags([ev.target.value.trim().slice(0, 20)])[0];
+    if (t && state.edit && !state.edit.tags.includes(t)) toggleTag(t);
     return render();
   }
   // role="button" board slots: Enter / Space activate them
