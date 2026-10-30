@@ -1,5 +1,7 @@
 import {
+  adminIds,
   getSetting,
+  isOwner,
   issueUnlock,
   requireRole,
   requireSession,
@@ -29,12 +31,13 @@ const parse = (s, d) => {
   }
 };
 
-const publicMember = (m) => ({
+const publicMember = (m, env) => ({
   id: m.discord_id,
   username: m.username,
   name: m.global_name || m.username,
   avatar: m.avatar ? `https://cdn.discordapp.com/avatars/${m.discord_id}/${m.avatar}.png?size=64` : null,
-  role: m.role,
+  role: isOwner(env, m.discord_id) ? 'admin' : m.role,
+  owner: isOwner(env, m.discord_id),
   status: m.status,
   mfa: !!m.mfa,
   lastSeen: m.last_seen,
@@ -47,7 +50,7 @@ const canBypass = (m) => m.role === 'admin' && !!m.mfa;
 // ---------- auth / password ----------
 
 on('GET', '/me', { unlock: false }, async ({ env, ctx }) => ({
-  user: publicMember(ctx.member),
+  user: publicMember(ctx.member, env),
   passwordSet: !!(await getSetting(env, 'pw_hash')),
   bypass: canBypass(ctx.member),
 }));
@@ -244,13 +247,22 @@ on('DELETE', '/plans/:id', { role: 'editor' }, async ({ env, request, ctx, param
 
 on('GET', '/members', { role: 'admin' }, async ({ env }) => {
   const { results } = await env.DB.prepare('SELECT * FROM members ORDER BY last_seen DESC').all();
-  return { members: results.map(publicMember) };
+  return { members: results.map((m) => publicMember(m, env)) };
 });
+
+// Only the owner may appoint / change / ban admins; nobody may touch the owner.
+async function guardMemberChange(env, actor, targetId, newRole) {
+  if (isOwner(env, targetId)) throw new HttpError(403, 'owner_protected');
+  if (isOwner(env, actor.discord_id)) return;
+  const row = await env.DB.prepare('SELECT role FROM members WHERE discord_id = ?').bind(targetId).first();
+  if (newRole === 'admin' || row?.role === 'admin' || adminIds(env).includes(targetId)) throw new HttpError(403, 'owner_only');
+}
 
 on('POST', '/members', { role: 'admin' }, async ({ env, request, ctx, body }) => {
   const id = String(body.discordId || '').trim();
   if (!/^\d{15,22}$/.test(id)) throw new HttpError(400, 'invalid_discord_id');
   const role = ROLES.includes(body.role) ? body.role : 'viewer';
+  await guardMemberChange(env, ctx.member, id, role);
   await env.DB.prepare(
     `INSERT INTO members (discord_id, username, role, status, created_at) VALUES (?, ?, ?, 'active', ?)
      ON CONFLICT(discord_id) DO UPDATE SET role = excluded.role, status = 'active'`,
@@ -265,6 +277,7 @@ on('PUT', '/members/:id', { role: 'admin' }, async ({ env, request, ctx, body, p
   if (params.id === ctx.member.discord_id) throw new HttpError(400, 'cannot_edit_self');
   const role = ROLES.includes(body.role) ? body.role : null;
   const status = ['active', 'banned'].includes(body.status) ? body.status : null;
+  await guardMemberChange(env, ctx.member, params.id, role);
   await env.DB.prepare('UPDATE members SET role = COALESCE(?, role), status = COALESCE(?, status) WHERE discord_id = ?')
     .bind(role, status, params.id)
     .run();

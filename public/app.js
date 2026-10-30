@@ -52,6 +52,9 @@ const STAT_FULL = {
   rejuv: 'ฟื้นคืน',
 };
 const ROLE_LABEL = { viewer: 'ดูอย่างเดียว', editor: 'แก้ไขได้', admin: 'แอดมิน' };
+const roleOf = (m) => (m?.owner ? 'เจ้าของ' : ROLE_LABEL[m?.role] || '');
+// like the Discord server owner: crown after the name
+const crown = (m) => (m?.owner ? html`<span class="crown" title="เจ้าของเว็บ">${icon('crown')}</span>` : '');
 const DAYS = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
 const DAY_SHORT = ['จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'];
 const DAY_KIND = {
@@ -70,6 +73,7 @@ function bkkNow() {
 
 const ICONS = {
   star: '<path class="f" d="M12 2l2.6 7.4L22 12l-7.4 2.6L12 22l-2.6-7.4L2 12l7.4-2.6z"/>',
+  crown: '<path d="M11.562 3.266a.5.5 0 0 1 .876 0L15.39 8.87a1 1 0 0 0 1.516.294L21.183 5.5a.5.5 0 0 1 .798.519l-2.834 10.246a1 1 0 0 1-.956.734H5.81a1 1 0 0 1-.957-.734L2.02 6.02a.5.5 0 0 1 .798-.519l4.276 3.664a1 1 0 0 0 1.516-.294z"/><path d="M5 21h14"/>',
   calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
   swords: '<path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2M14.5 6.5 18 3h3v3l-3.5 3.5M5 14l4 4M7 17l-3 3M3 19l2 2"/>',
   shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
@@ -223,6 +227,8 @@ const errMsg = (e) =>
     password_length: 'รหัสต้องยาว 8-128 ตัวอักษร',
     invalid_discord_id: 'Discord ID ไม่ถูกต้อง',
     cannot_edit_self: 'แก้ไขสิทธิ์ตัวเองไม่ได้',
+    owner_only: 'เฉพาะเจ้าของเว็บเท่านั้นที่แต่งตั้งหรือแก้ไขแอดมินได้',
+    owner_protected: 'ไม่สามารถแก้ไขเจ้าของเว็บได้',
     title_required: 'กรุณาใส่ชื่อแผน',
     fetch_failed: 'ดึงข้อมูลจาก 7k-note ไม่สำเร็จ',
     invalid_json: 'รูปแบบ JSON ไม่ถูกต้อง',
@@ -1129,23 +1135,29 @@ function viewAdmin() {
       <form data-form="add-member" class="inline">
         <input name="discordId" placeholder="Discord User ID" required pattern="\\d{15,22}" />
         <input name="note" placeholder="ชื่อ (ไม่บังคับ)" />
-        <select name="role">${Object.entries(ROLE_LABEL).map(([k, v]) => html`<option value="${k}" ${k === 'viewer' ? raw('selected') : ''}>${v}</option>`)}</select>
+        <select name="role">${Object.entries(ROLE_LABEL)
+          .filter(([k]) => k !== 'admin' || state.me.owner)
+          .map(([k, v]) => html`<option value="${k}" ${k === 'viewer' ? raw('selected') : ''}>${v}</option>`)}</select>
         <button class="btn primary">เพิ่มสมาชิก</button>
       </form>
       <div class="table-wrap"><table>
         <thead><tr><th></th><th>ชื่อ</th><th>Discord ID</th><th>สิทธิ์</th><th>สถานะ</th><th>ใช้งานล่าสุด</th></tr></thead>
-        <tbody>${a.members.map(
-          (m) => html`<tr class="${m.status === 'banned' ? 'banned' : ''}">
+        <tbody>${a.members.map((m) => {
+          // only the owner may touch admins; nobody may touch the owner
+          const locked = m.id === state.me.id || m.owner || (m.role === 'admin' && !state.me.owner);
+          return html`<tr class="${m.status === 'banned' ? 'banned' : ''}">
             <td>${m.avatar ? html`<img class="avatar" src="${m.avatar}" alt="" />` : ''}</td>
-            <td>${m.name || '-'}</td>
+            <td>${m.name || '-'}${crown(m)}</td>
             <td class="mono">${m.id}</td>
-            <td><select data-member-role="${m.id}" ${m.id === state.me.id ? raw('disabled') : ''}>${Object.entries(ROLE_LABEL).map(
-              ([k, v]) => html`<option value="${k}" ${m.role === k ? raw('selected') : ''}>${v}</option>`,
-            )}</select></td>
-            <td>${m.id === state.me.id ? 'คุณ' : html`<button class="btn small ${m.status === 'banned' ? '' : 'danger'}" data-action="toggle-ban" data-id="${m.id}" data-status="${m.status === 'banned' ? 'active' : 'banned'}">${m.status === 'banned' ? 'ปลดแบน' : 'แบน/ถอดสิทธิ์'}</button>`}</td>
+            <td>${m.owner
+              ? html`<span class="role">เจ้าของ</span>`
+              : html`<select data-member-role="${m.id}" ${locked ? raw('disabled') : ''}>${Object.entries(ROLE_LABEL)
+                  .filter(([k]) => k !== 'admin' || state.me.owner || m.role === 'admin')
+                  .map(([k, v]) => html`<option value="${k}" ${m.role === k ? raw('selected') : ''}>${v}</option>`)}</select>`}</td>
+            <td>${m.id === state.me.id ? 'คุณ' : locked ? html`<span class="muted small">${m.owner ? 'เจ้าของ' : 'เฉพาะเจ้าของ'}</span>` : html`<button class="btn small ${m.status === 'banned' ? '' : 'danger'}" data-action="toggle-ban" data-id="${m.id}" data-status="${m.status === 'banned' ? 'active' : 'banned'}">${m.status === 'banned' ? 'ปลดแบน' : 'แบน/ถอดสิทธิ์'}</button>`}</td>
             <td class="small">${fmtDate(m.lastSeen)}</td>
-          </tr>`,
-        )}</tbody>
+          </tr>`;
+        })}</tbody>
       </table></div>
     </div>
     <div class="panel">
@@ -1535,7 +1547,7 @@ function renderNav() {
         <button class="btn icon ghost" data-action="lock" title="ล็อคหน้าจอ">${icon('lock')}</button>`
       : html`<span class="spacer"></span>`}
     ${state.me
-      ? html`<span class="user">${state.me.avatar ? html`<img src="${state.me.avatar}" alt="" />` : ''}<span>${state.me.name}</span><span class="role">${ROLE_LABEL[state.me.role]}</span></span>
+      ? html`<span class="user">${state.me.avatar ? html`<img src="${state.me.avatar}" alt="" />` : ''}<span>${state.me.name}</span>${crown(state.me)}<span class="role">${roleOf(state.me)}</span></span>
         <button class="btn icon ghost" data-action="logout" title="ออกจากระบบ">${icon('logout')}</button>`
       : ''}`);
 }

@@ -76,6 +76,8 @@ svg.i .f { fill: currentColor; stroke: none; }
 .user { display: inline-flex; align-items: center; gap: 8px; font-size: 0.88rem; }
 .user img { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line2); }
 .role { font-size: 0.7rem; color: var(--gold); border: 1px solid var(--gold2); border-radius: 999px; padding: 0 8px; }
+.crown { display: inline-flex; vertical-align: middle; margin-left: 4px; }
+.crown svg { width: 15px; height: 15px; fill: #f4c542; stroke: #b8860b; stroke-width: 1.5; filter: drop-shadow(0 0 3px rgba(244, 197, 66, 0.55)); }
 
 main { max-width: 1160px; margin: 0 auto; padding: 22px 20px 10px; }
 

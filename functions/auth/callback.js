@@ -1,4 +1,4 @@
-import { adminIds, createSession, SESSION_COOKIE, SESSION_DAYS } from '../../lib/auth.js';
+import { adminIds, createSession, isOwner, SESSION_COOKIE, SESSION_DAYS } from '../../lib/auth.js';
 import { audit, cookie, parseCookies, redirect, safeEqual, safeNext } from '../../lib/util.js';
 import { STATE_COOKIE } from './login.js';
 
@@ -43,7 +43,7 @@ export async function onRequestGet({ request, env }) {
 
   const now = Date.now();
   const existing = await env.DB.prepare('SELECT role, status FROM members WHERE discord_id = ?').bind(user.id).first();
-  const isAdmin = adminIds(env).includes(user.id);
+  const isAdmin = adminIds(env).includes(user.id) || isOwner(env, user.id);
 
   let role = existing?.role;
   if (existing?.status === 'banned' && !isAdmin) {
