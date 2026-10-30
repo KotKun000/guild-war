@@ -212,6 +212,7 @@ async function main() {
 
   const heroOut = await pool(heroes, 8, async (h) => {
     const aliases = [...(HERO_ALIASES[h.name] || []), h.name_th, lastWord(h.name_th), h.name].filter(Boolean);
+    const awk = await download(h.portraits?.awk, `img/heroes/${h.id}-awk.webp`, HERO_W, HERO_H);
     return {
       id: h.id,
       name: aliases[0],
@@ -220,8 +221,9 @@ async function main() {
       type: h.type || null,
       released: h.release_date || '',
       aliases: [...new Set(aliases)],
-      img: await download(best(h.portraits), `img/heroes/${h.id}.webp`, HERO_W, HERO_H),
-      awk: await download(h.portraits?.awk, `img/heroes/${h.id}-awk.webp`, HERO_W, HERO_H),
+      // awake-only heroes (new releases) have no base portrait on 7K Atlas: reuse the awake one
+      img: (await download(best(h.portraits), `img/heroes/${h.id}.webp`, HERO_W, HERO_H)) || awk,
+      awk,
     };
   });
 
@@ -238,6 +240,8 @@ async function main() {
   // newest first inside each rarity group (like the in-game list)
   const byRarity = (a, b) =>
     RARITY_ORDER.indexOf(a.rarity) - RARITY_ORDER.indexOf(b.rarity) || (b.released || '').localeCompare(a.released || '') || a.name.localeCompare(b.name, 'th');
+  const skipped = heroOut.filter((h) => !h.img);
+  if (skipped.length) console.log(`  ! skipped heroes with no portrait: ${skipped.map((h) => `${h.name} (${h.en}, ${h.released || '?'})`).join(', ')}`);
   const assets = {
     source: 'Heroes/pets/types: 7K Atlas (7katlas.com) · skills/rings/sets/stats: 7K Note (7k-note.pages.dev)',
     updatedAt: new Date().toISOString(),
