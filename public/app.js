@@ -151,6 +151,7 @@ const state = {
   activeTeam: null,
   modal: null, // { kind: 'grid' | 'filter' | 'formation' | 'skills', team?, skills? }
   step: 2,
+  planWiz: null, // { si, oi, step, snapshot, fresh }
   dock: { tab: 'hero', q: '', rarity: '', type: '', petRarity: '', search: false, collapsed: false },
 };
 
@@ -290,6 +291,30 @@ const fmtDate = (ts) => (ts ? new Date(ts).toLocaleString('th-TH', { dateStyle: 
 const findTarget = (id) => state.data?.targets.find((t) => t.id === id);
 const findPlan = (id) => state.data?.plans.find((p) => p.id === id);
 const emptyTeam = () => ({ front: 2, slots: [null, null, null, null, null], pet: null, extras: [null, null, null, null], speed: 0 });
+const emptyOption = () => ({ team: emptyTeam(), skills: [], heroNotes: [], condition: '', notes: '' });
+const noteFilled = (n) => !!(n && (n.text || n.sets?.length || n.rings?.length || Object.keys(n.stats || {}).length));
+const LAST_PREFIX = 'egg2k:last:';
+function readLastStats(base) {
+  try {
+    const v = localStorage.getItem(LAST_PREFIX + base);
+    return v ? JSON.parse(v) : null;
+  } catch {
+    return null;
+  }
+}
+function rememberHeroNotes(notes) {
+  try {
+    for (const n of notes || []) {
+      if (!n?.hero || (!n.sets?.length && !n.rings?.length && !Object.keys(n.stats || {}).length)) continue;
+      localStorage.setItem(
+        LAST_PREFIX + heroInfo(n.hero).base,
+        JSON.stringify({ stats: n.stats || {}, sets: n.sets || [], rings: n.rings || [], ts: Date.now() }),
+      );
+    }
+  } catch {
+    /* private mode / quota */
+  }
+}
 
 function allNames() {
   const heroes = new Set();
@@ -425,7 +450,7 @@ function board(team, skills, title = '', edit = null, { view = null, mirror = fa
     html`<div class="slot-wrap">${heroCard(team.slots[i], {
       blocked: full,
       cls: isSel('slots', i) ? 'selected' : '',
-      attrs: edit ? act('slot', `data-field="slots" data-i="${i}"`) : team.slots[i] ? viewAct('open-detail') : raw(''),
+      attrs: edit ? act('slot', `data-field="slots" data-i="${i}"`) : team.slots[i] && !view?.noHero ? viewAct('open-detail') : raw(''),
       orders: ordersOf(i),
     })}
       ${edit && team.slots[i] ? html`<button type="button" class="x" data-action="slot-clear" data-team="${edit.prefix}" data-field="slots" data-i="${i}" title="เอาออก">×</button>` : ''}
@@ -500,30 +525,61 @@ function teamEditor(prefix, team, skills, skillsPath, notes, notesPath, title = 
   </div>`;
 }
 
-function notesEditor(notes, notesPath) {
-  if (!notes.length) return html`<p class="muted center small">ใส่อัศวินในทีมก่อน แล้วค่อยจดอุปกรณ์/ค่าความสามารถ</p>`;
-  const gearEdit = (n, i, field, map) =>
-    html`<div class="gear-slots">${[0, 1, 2].map((k) => {
-      const v = n[field][k];
-      return html`<button type="button" class="gear ${v ? '' : 'empty'}" data-action="pick-gear" data-path="${notesPath}.${i}.${field}" data-k="${k}" data-kind="${field}" title="${v || 'เลือก'}">
-        ${v ? (map[v] ? html`<img src="${map[v]}" alt="${v}" />` : html`<small>${v}</small>`) : html`<span class="plus">+</span>`}
-      </button>`;
-    })}</div>`;
-  return html`<ul class="hero-detail edit">${notes.map(
-    (n, i) => html`<li>
-      <div class="hd-left">
-        <div class="hd-head">${heroCard(n.hero, { cls: 'md' })}<b>${n.hero}</b></div>
-        <div class="lbl">เครื่องประดับ</div>${gearEdit(n, i, 'rings', AS.rings || {})}
-        <div class="lbl">เซต</div>${gearEdit(n, i, 'sets', AS.sets || {})}
-      </div>
-      <div class="hd-right">
-        <div class="stat-edit">${STATS.map(
-          ([k, l]) => html`<label class="stat-pill">${AS.stats?.[k] ? html`<img src="${AS.stats[k]}" alt="" />` : ''}<span>${STAT_FULL[k] || l}</span><input type="number" step="any" value="${n.stats[k] ?? ''}" placeholder="—" data-bind="${notesPath}.${i}.stats.${k}" data-type="stat" />${PCT_STATS.has(k) ? html`<i>%</i>` : ''}</label>`,
-        )}</div>
-        <label>โน้ต <textarea rows="2" data-bind="${notesPath}.${i}.text" placeholder="เช่น ต้องเร็วกว่าใคร ค่าไหนสำคัญสุด">${n.text}</textarea></label>
-      </div>
-    </li>`,
-  )}</ul>`;
+function gearEditSlots(n, path, field, map) {
+  const list = n[field] || [];
+  return html`<div class="gear-slots">${list.map((v, k) =>
+      html`<button type="button" class="gear" data-action="pick-gear" data-path="${path}.${field}" data-k="${k}" data-kind="${field}" title="${v}">
+        ${map[v] ? html`<img src="${map[v]}" alt="${v}" />` : html`<small>${v}</small>`}
+      </button>`,
+    )}${list.length < 3
+      ? html`<button type="button" class="gear empty gear-add" data-action="pick-gear" data-path="${path}.${field}" data-k="${list.length}" data-kind="${field}" title="เพิ่ม">
+          <span class="plus">+</span>
+        </button>`
+      : ''}
+  </div>`;
+}
+
+function lastAgoLabel(ts) {
+  const a = timeAgo(ts);
+  return a === 'เมื่อครู่' ? a : `${a}ก่อน`;
+}
+
+function notesEditor(notes, notesPath, opts = {}) {
+  if (!notes?.length) return html`<p class="muted center small">ใส่อัศวินในทีมก่อน แล้วค่อยจดอุปกรณ์/ค่าความสามารถ</p>`;
+  return html`<div class="hn-editor">
+    <p class="muted small">ใส่อุปกรณ์ ค่าความสามารถ และคำอธิบายของแต่ละตัว (แถวละ 1 ตัว) — ข้ามได้ กด "เสร็จ" ได้เลย</p>
+    <div class="hn-toolbar"><button type="button" class="btn small" data-action="pick-saved-notes" data-path="${notesPath}">เลือกจากที่จดไว้</button><button type="button" class="btn small" data-action="open-ocr" data-path="${notesPath}" data-i="0">📷 อ่านค่าจากรูป</button></div>
+    <div class="hn-table">
+      <div class="hn-head"><span>อัศวิน</span><span>รายละเอียด</span></div>
+      ${notes.map((n, i) => {
+        n.sets ||= [];
+        n.rings ||= [];
+        n.stats ||= {};
+        const path = `${notesPath}.${i}`;
+        const last = readLastStats(heroInfo(n.hero).base);
+        const filled = noteFilled(n);
+        const hasStats = STATS.some(([k]) => typeof n.stats?.[k] === 'number' && n.stats[k] !== 0);
+        return html`<div class="hn-row">
+          <div class="hn-left">
+            <div class="hd-head">${heroCard(n.hero, { cls: 'md' })}<b>${heroInfo(n.hero).base}</b></div>
+            <div class="lbl">เซต</div>${gearEditSlots(n, path, 'sets', AS.sets || {})}
+            <div class="lbl">เครื่องประดับ</div>${gearEditSlots(n, path, 'rings', AS.rings || {})}
+            ${last ? html`<button type="button" class="btn small" data-action="hn-use-last" data-path="${path}">⟲ ใช้ค่าความสามารถล่าสุดของฉัน (${lastAgoLabel(last.ts)})</button>` : ''}
+          </div>
+          <div class="hn-right">
+            <button type="button" class="hn-x" data-action="hn-clear" data-path="${path}" title="ล้างข้อมูลแถวนี้" ${filled ? '' : raw('disabled')}>×</button>
+            <textarea maxlength="300" rows="3" data-bind="${path}.text" placeholder="คำอธิบายตัวนี้">${n.text || ''}</textarea>
+            <button type="button" class="btn btn-gold-outline" data-action="open-stats" data-path="${path}">✎ ใส่ค่าความสามารถ</button>
+            ${hasStats ? statPills(n.stats) : ''}
+            <button type="button" class="btn small ghost" data-action="hn-clear" data-path="${path}" ${filled ? '' : raw('disabled')}>ล้างข้อมูลตัวนี้</button>
+          </div>
+        </div>`;
+      })}
+    </div>
+    ${opts.notePath
+      ? html`<label>โน้ตทีม <textarea maxlength="500" rows="3" data-bind="${opts.notePath}" placeholder="${'โน้ต บรรทัดละ 1 ข้อ เช่น\nความเร็ว 180+ เฟรย่าแบกความเร็ว\nอาริส จุด 100 บล็อค 78'}">${getPath(state.edit, opts.notePath) || ''}</textarea></label>`
+      : ''}
+  </div>`;
 }
 
 // keep heroNotes / skills consistent with heroes in the team
@@ -820,10 +876,12 @@ function viewTargetEdit(id) {
 }
 
 const STEPS = ['บ้านที่จะตี', 'ทีมแก้', 'อุปกรณ์/ค่าความสามารถ'];
-const stepTabs = () =>
-  html`<nav class="steps">${STEPS.map(
-    (l, i) => html`${i ? html`<span class="sep">›</span>` : ''}<a href="#" class="${state.step === i + 1 ? 'active' : state.step > i + 1 ? 'done' : ''}" data-action="step" data-step="${i + 1}"><b>${i + 1}</b> ${l}</a>`,
+const PLAN_STEPS = ['บ้านกัน', 'อุปกรณ์/ค่าความสามารถ'];
+const stepNav = (labels, step, action) =>
+  html`<nav class="steps">${labels.map(
+    (l, i) => html`${i ? html`<span class="sep">›</span>` : ''}<a href="#" class="${step === i + 1 ? 'active' : step > i + 1 ? 'done' : ''}" data-action="${action}" data-step="${i + 1}"><b>${i + 1}</b> ${l}</a>`,
   )}</nav>`;
+const stepTabs = () => stepNav(STEPS, state.step, 'step');
 
 function viewCounterEdit(tid, cid) {
   const t = findTarget(tid);
@@ -880,27 +938,111 @@ function viewPlans() {
 function viewPlan(id) {
   const p = findPlan(id);
   if (!p) return html`<p class="center muted">ไม่พบแผน</p>`;
+  const isAttack = p.data.kind === 'attack';
   return html`<div class="toolbar">
       <a class="btn ghost" href="#/plans">${icon('back')} กลับ</a>
-      <h2>${icon(p.data.kind === 'attack' ? 'swords' : 'shield')} ${p.title}</h2>
-      <button class="btn" data-action="share" data-hash="#/p/${p.id}">${icon('link')} แชร์ลิงก์</button>
-      ${can('editor') ? html`<a class="btn" href="#/p/${p.id}/edit">${icon('edit')} แก้ไข</a><button class="btn danger" data-action="del-plan" data-id="${p.id}">${icon('trash')} ลบ</button>` : ''}
+      <span class="spacer"></span>
+      <button class="btn small" data-action="share" data-hash="#/p/${p.id}">${icon('link')} แชร์ลิงก์</button>
+      ${can('editor') ? html`<a class="btn small" href="#/p/${p.id}/edit">${icon('edit')} แก้ไข</a><button class="btn small danger" data-action="del-plan" data-id="${p.id}">${icon('trash')} ลบ</button>` : ''}
     </div>
-    ${p.data.note ? html`<div class="panel pre note">${p.data.note}</div>` : ''}
-    ${(p.data.slots || []).map(
-      (s) => html`<div class="panel frame">
-        <h3>${s.name}</h3>
-        ${(s.options || []).map(
-          (o, i) => html`<div class="option">
-            ${s.options.length > 1 ? html`<div class="muted small">ตัวเลือก ${i + 1}</div>` : ''}
-            ${o.condition ? html`<div class="condition">เงื่อนไข: ${o.condition}</div>` : ''}
-            ${teamView(o.team || emptyTeam(), o.skills || [])}
-            ${o.notes ? html`<div class="pre note">${o.notes}</div>` : ''}
-            ${heroNotesView(o.heroNotes)}
+    <header class="plan-heading">
+      <div class="kicker">GUILD WAR · BATTLE PLAN</div>
+      <h1 class="gold-title">${p.title}</h1>
+      <span class="pill ${isAttack ? 'attack' : 'defense'}">${icon(isAttack ? 'swords' : 'shield')} ${isAttack ? 'แผนบุก' : 'แผนกัน'}</span>
+      <div class="muted small">อัปเดต ${fmtDate(p.updatedAt)}</div>
+    </header>
+    ${p.data.note ? html`<div class="panel pre note plan-note">${p.data.note}</div>` : ''}
+    <div class="plan-grid">${(p.data.slots || []).map((s, si) => {
+      const opts = s.options || [];
+      const o = opts[0];
+      if (!o) return '';
+      const key = (i) => `p:${p.id}:${si}:${i}`;
+      return html`<div class="plan-tile" role="button" tabindex="0" data-action="open-detail" data-key="${key(0)}">
+        ${teamView(o.team || emptyTeam(), o.skills || [], { title: s.name, view: { key: key(0) } })}
+        <div class="tile-foot">
+          <button type="button" class="tile-link" data-action="open-detail" data-key="${key(0)}">กดดูรายละเอียด</button>
+          ${opts.slice(1).map((_, j) => html`<button type="button" class="tile-link reserve" data-action="open-detail" data-key="${key(j + 1)}">สำรอง ${j + 1}</button>`)}
+        </div>
+      </div>`;
+    })}</div>`;
+}
+
+function openPlanWiz(si, oi, fresh = false) {
+  const o = state.edit.data.slots[si].options[oi];
+  state.planWiz = { si, oi, step: 1, snapshot: clone(o), fresh };
+  state.activeTeam = `data.slots.${si}.options.${oi}.team`;
+  state.sel = null;
+  state.modal = null;
+}
+
+function viewPlanWizard(e, id) {
+  const w = state.planWiz;
+  const s = e.data.slots[w.si];
+  const o = s?.options?.[w.oi];
+  if (!s || !o) {
+    state.planWiz = null;
+    return viewPlanEditOverview(e, id);
+  }
+  const prefix = `data.slots.${w.si}.options.${w.oi}`;
+  state.activeTeam = `${prefix}.team`;
+  syncTeam(o.team, o.skills, o.heroNotes);
+  const labels = e.data.kind === 'attack' ? ['ทีมบุก', PLAN_STEPS[1]] : PLAN_STEPS;
+  return html`${datalists()}<div class="wiz frame">
+      <div class="wiz-head">
+        <span class="wiz-badge">${s.name}</span>
+        ${s.options.length > 1 ? html`<span class="muted small">ตัวเลือก ${w.oi + 1}</span>` : ''}
+        ${stepNav(labels, w.step, 'plan-wiz-step')}
+      </div>
+      <div class="wiz-body">
+        ${w.step === 1
+          ? html`${teamEditor(`${prefix}.team`, o.team, o.skills, `${prefix}.skills`, null, null, s.name)}
+            <label>เงื่อนไข <input value="${o.condition}" data-bind="${prefix}.condition" placeholder="เช่น เจอแทงก์ / บ้านช้า" /></label>`
+          : notesEditor(o.heroNotes, `${prefix}.heroNotes`, { notePath: `${prefix}.notes` })}
+      </div>
+      <div class="wiz-foot">
+        <button type="button" class="btn ghost" data-action="plan-wiz-cancel">ยกเลิก</button>
+        <span class="spacer"></span>
+        ${w.step > 1 ? html`<button type="button" class="btn" data-action="plan-wiz-step" data-step="${w.step - 1}">ย้อนกลับ</button>` : ''}
+        ${w.step < 2
+          ? html`<button type="button" class="btn" data-action="plan-wiz-step" data-step="${w.step + 1}">ถัดไป</button>`
+          : html`<button type="button" class="btn primary" data-action="plan-wiz-done">✓ เสร็จ</button>`}
+      </div>
+    </div>`;
+}
+
+function viewPlanEditOverview(e, id) {
+  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id.startsWith('new') ? '#/plans' : `#/p/${id}`}">${icon('back')} ยกเลิก</a><h2>${id.startsWith('new') ? `สร้างแผน${e.data.kind === 'attack' ? 'บุก' : 'กัน'}` : 'แก้ไขแผน'}</h2></div>
+    <div class="panel">
+      <div class="grid2">
+        <label>ชื่อแผน <input value="${e.title}" data-bind="title" /></label>
+        <label>ประเภท <select data-bind="data.kind" data-rerender>${[['defense', 'ป้องกัน'], ['attack', 'บุก']].map(([k, v]) => html`<option value="${k}" ${e.data.kind === k ? raw('selected') : ''}>${v}</option>`)}</select></label>
+      </div>
+      <label>โน้ตแผน <textarea rows="3" data-bind="data.note">${e.data.note || ''}</textarea></label>
+    </div>
+    <div class="plan-cards">${e.data.slots.map((s, si) => {
+      s.options.forEach((o) => syncTeam(o.team, o.skills, o.heroNotes));
+      return html`<div class="slot-card">
+        <div class="slot-head"><input class="slot-name" value="${s.name}" data-bind="data.slots.${si}.name" />
+          <button type="button" class="btn icon small danger slot-del" data-action="plan-slot-del" data-i="${si}" title="ลบไม้นี้">${icon('trash')}</button></div>
+        <div class="plan-options">${s.options.map(
+          (o, oi) => html`<div class="option">
+            <div class="edit-hit" role="button" tabindex="0" data-action="plan-wiz-open" data-i="${si}" data-j="${oi}" title="แตะเพื่อแก้ไขทีม">
+              <div class="muted small">${oi === 0 ? 'ทีมหลัก' : `สำรอง ${oi}`}</div>
+              ${o.condition ? html`<div class="condition">เงื่อนไข: ${o.condition}</div>` : ''}
+              ${teamView(o.team || emptyTeam(), o.skills || [])}
+              <span class="edit-hint">✎ แก้ไข</span>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn small ghost" data-action="plan-opt-del" data-i="${si}" data-j="${oi}">ลบ</button>
+            </div>
           </div>`,
-        )}
-      </div>`,
-    )}`;
+        )}</div>
+        <button type="button" class="btn small" data-action="plan-opt-add" data-i="${si}">+ ทีมสำรอง</button>
+      </div>`;
+    })}<button type="button" class="slot-add" data-action="plan-slot-add"><span class="plus">+</span>ตั้งไม้ ${e.data.slots.length + 1}</button></div>
+    <div class="actions">
+      <button type="button" class="btn primary" data-action="save-plan" data-id="${id}">บันทึกแผน</button>
+    </div>`;
 }
 
 function viewPlanEdit(id) {
@@ -915,37 +1057,11 @@ function viewPlanEdit(id) {
       for (const o of s.options) (o.team ||= emptyTeam()), (o.skills ||= []), (o.heroNotes ||= []), (o.condition ||= ''), (o.notes ||= '');
     }
     state.edit = { __key: `p:${id}`, title: p?.title || '', data };
+    state.planWiz = null;
   }
   const e = state.edit;
-  return html`${datalists()}<div class="toolbar"><a class="btn ghost" href="${id.startsWith('new') ? '#/plans' : `#/p/${id}`}">${icon('back')} ยกเลิก</a><h2>${id.startsWith('new') ? `สร้างแผน${e.data.kind === 'attack' ? 'บุก' : 'กัน'}` : 'แก้ไขแผน'}</h2></div>
-    <div class="panel">
-      <div class="grid2">
-        <label>ชื่อแผน <input value="${e.title}" data-bind="title" /></label>
-        <label>ประเภท <select data-bind="data.kind">${[['defense', 'ป้องกัน'], ['attack', 'บุก']].map(([k, v]) => html`<option value="${k}" ${e.data.kind === k ? raw('selected') : ''}>${v}</option>`)}</select></label>
-      </div>
-      <label>โน้ตแผน <textarea rows="3" data-bind="data.note">${e.data.note || ''}</textarea></label>
-    </div>
-    ${e.data.slots.map((s, si) => {
-      s.options.forEach((o) => syncTeam(o.team, o.skills, o.heroNotes));
-      return html`<div class="panel">
-        <div class="toolbar"><input class="slot-name" value="${s.name}" data-bind="data.slots.${si}.name" />
-          <button class="btn small danger" data-action="plan-slot-del" data-i="${si}">ลบไม้นี้</button></div>
-        ${s.options.map(
-          (o, oi) => html`<div class="option">
-            <div class="toolbar"><b>ตัวเลือก ${oi + 1}</b><button class="btn small ghost" data-action="plan-opt-del" data-i="${si}" data-j="${oi}">ลบตัวเลือก</button></div>
-            <label>เงื่อนไข <input value="${o.condition}" data-bind="data.slots.${si}.options.${oi}.condition" /></label>
-            ${teamEditor(`data.slots.${si}.options.${oi}.team`, o.team, o.skills, `data.slots.${si}.options.${oi}.skills`, null, null, `${s.name} · ตัวเลือก ${oi + 1}`)}
-            <details class="hn-details"><summary>อุปกรณ์/ค่าความสามารถ (${o.heroNotes.length} ตัว)</summary>${notesEditor(o.heroNotes, `data.slots.${si}.options.${oi}.heroNotes`)}</details>
-            <label>โน้ต <textarea rows="2" data-bind="data.slots.${si}.options.${oi}.notes">${o.notes}</textarea></label>
-          </div>`,
-        )}
-        <button class="btn small" data-action="plan-opt-add" data-i="${si}">+ เพิ่มตัวเลือกทีม</button>
-      </div>`;
-    })}
-    <div class="actions">
-      <button class="btn" data-action="plan-slot-add">+ เพิ่มไม้</button>
-      <button class="btn primary" data-action="save-plan" data-id="${id}">บันทึกแผน</button>
-    </div>`;
+  if (state.planWiz) return viewPlanWizard(e, id);
+  return viewPlanEditOverview(e, id);
 }
 
 function viewAdmin() {
@@ -1016,6 +1132,35 @@ function viewAdmin() {
     </div>`;
 }
 
+function collectSavedNotes(notes) {
+  const bases = new Set((notes || []).map((n) => heroInfo(n.hero).base).filter(Boolean));
+  const out = [];
+  if (!bases.size) return out;
+  for (const t of state.data.targets || []) {
+    (t.counters || []).forEach((c, i) => {
+      for (const n of c.heroNotes || []) {
+        if (!noteFilled(n) || !bases.has(heroInfo(n.hero).base)) continue;
+        out.push({ n, src: `${t.tags?.length ? t.tags.join(' ') + ' · ' : ''}ทีมแก้ #${i + 1}`, ts: c.updatedAt || t.updatedAt });
+      }
+    });
+  }
+  for (const p of state.data.plans || []) {
+    (p.data?.slots || []).forEach((s) => {
+      (s.options || []).forEach((o, oi) => {
+        for (const n of o.heroNotes || []) {
+          if (!noteFilled(n) || !bases.has(heroInfo(n.hero).base)) continue;
+          out.push({
+            n,
+            src: `${p.title} · ${s.name}${s.options.length > 1 ? ` · ตัวเลือก ${oi + 1}` : ''}`,
+            ts: p.updatedAt,
+          });
+        }
+      });
+    });
+  }
+  return out;
+}
+
 // ---------- dock: bottom strip of hero / pet cards with search + filters ----------
 const searchKey = (x) => x.aliases.join(' ').toLowerCase();
 const matchQ = (x) => {
@@ -1040,7 +1185,7 @@ function dockCard(x, kind, used) {
     </button>`;
   return html`<button type="button" class="dcard t-${x.type || 'none'} ${on ? 'used' : ''}" data-action="dock-pick" data-kind="hero" data-value="${defaultHeroName(x)}" data-search="${searchKey(x)}" title="${x.name}" ${hidden ? raw('hidden') : ''}>
     ${portrait(x.awk || x.img)}
-    ${x.type && AS.types?.[x.type] ? html`<img class="type" src="${AS.types[x.type]}" alt="" />` : ''}
+    ${x.type && AS.types?.[x.type] ? html`<span class="role"><img src="${AS.types[x.type]}" alt="" /></span>` : ''}
     ${x.awk ? html`<span class="awk-dot" title="มีร่างอเวค"></span>` : ''}
     <span class="nm">${x.name}</span>
   </button>`;
@@ -1151,8 +1296,12 @@ function viewModal() {
     return wrap(
       `${ctx.title} · รายละเอียดทั้งทีม`,
       html`<div class="detail-grid">
-        <div class="detail-board">${teamView(ctx.team, ctx.skills, { title: heroesOf(ctx.team).map(heroBase).join(' · '), tone: ctx.tone })}</div>
-        ${ctx.notes ? heroNotesView(ctx.notes) || html`<p class="muted center">ยังไม่ได้จดอุปกรณ์/ค่าความสามารถ</p>` : html`<p class="muted center">บ้านศัตรูไม่มีรายละเอียดอุปกรณ์</p>`}
+        <div class="detail-board">${teamView(ctx.team, ctx.skills, { title: heroesOf(ctx.team).map(heroBase).join(' · '), tone: ctx.tone, view: { key: m.key, noHero: true } })}</div>
+        <div class="detail-side">
+          ${ctx.condition ? html`<div class="condition">เงื่อนไข: ${ctx.condition}</div>` : ''}
+          ${ctx.note ? html`<div class="pre note">${ctx.note}</div>` : ''}
+          ${ctx.notes ? heroNotesView(ctx.notes) || html`<p class="muted center">ยังไม่ได้จดอุปกรณ์/ค่าความสามารถ</p>` : html`<p class="muted center">บ้านศัตรูไม่มีรายละเอียดอุปกรณ์</p>`}
+        </div>
       </div>
       <button type="button" class="btn primary block" data-action="modal-close">ปิดรายละเอียด</button>`,
       'wide',
@@ -1188,6 +1337,86 @@ function viewModal() {
     );
   }
 
+  if (m.kind === 'stats') {
+    const n = getPath(state.edit, m.path);
+    if (!n) return '';
+    const sp = `${m.path}.stats`;
+    return wrap(
+      html`<span class="stats-title">${heroCard(n.hero, { cls: 'sm' })} ค่าความสามารถ · ${heroInfo(n.hero).base}</span>`,
+      html`<div class="stat-edit">${STATS.map(
+        ([k, l]) => html`<label class="stat-pill">${AS.stats?.[k] ? html`<img src="${AS.stats[k]}" alt="" />` : ''}<span>${STAT_FULL[k] || l}</span><input type="number" step="any" value="${n.stats?.[k] ?? ''}" placeholder="—" data-bind="${sp}.${k}" data-type="stat" />${PCT_STATS.has(k) ? html`<i>%</i>` : ''}</label>`,
+      )}</div>
+      <div class="actions"><button type="button" class="btn danger" data-action="stats-clear" data-path="${m.path}">ล้างค่า</button><button type="button" class="btn" data-action="open-ocr" data-path="${m.path.slice(0, m.path.lastIndexOf('.'))}" data-i="${m.path.slice(m.path.lastIndexOf('.') + 1)}" data-from-stats="${m.path}">📷 อ่านค่าจากรูป</button><button type="button" class="btn primary" data-action="modal-close">เสร็จ</button></div>`,
+      'medium',
+    );
+  }
+
+  if (m.kind === 'ocr') {
+    const notes = getPath(state.edit, m.path) || [];
+    const n = notes[m.i];
+    if (!n || !state.edit) return '';
+    const sc = state.edit.__ocr?.stats || {};
+    const busy = m.status === 'loading';
+    const base = heroInfo(n.hero).base;
+    const status = busy
+      ? html`<div class="ocr-status"><progress max="1" value="${m.progress || 0}" data-ocr-progress></progress><span class="muted small" data-ocr-label>${m.label}</span></div>`
+      : m.status === 'error'
+        ? html`<div class="ocr-status err">${m.error}</div>`
+        : m.status === 'done'
+          ? html`<div class="ocr-status ${m.missing.length ? 'warn' : 'ok'}">อ่านได้ ${STATS.length - m.missing.length}/${STATS.length} ช่อง${m.missing.length ? ' — ช่องที่ไฮไลต์ไว้อ่านไม่ได้ กรอกเองได้เลย' : ''}</div>`
+          : '';
+    return wrap(
+      '📷 อ่านค่าความสามารถจากรูป',
+      html`<div class="ocr">
+        <div class="ocr-left">
+          <label class="ocr-drop ${m.preview ? 'has' : ''}" data-drop>
+            <input type="file" accept="image/*" class="ocr-file" data-ocr-file />
+            ${m.preview ? html`<img src="${m.preview}" alt="รูปที่เลือก" />` : html`<span class="ocr-ico">📷</span>`}
+            <b>${m.preview ? 'เปลี่ยนรูป' : 'ลากรูปมาวาง หรือกดเลือกรูป'}</b>
+            <span class="muted small">หรือกด Ctrl+V เพื่อวางรูปจากคลิปบอร์ด</span>
+          </label>
+          <details class="ocr-help" ${m.preview ? '' : raw('open')}>
+            <summary>วิธีใช้ / ต้องแคปหน้าไหน</summary>
+            <ol class="small">
+              <li>ในเกม กดที่อัศวินเพื่อเปิดหน้าข้อมูลอัศวิน ให้เห็นแผงค่าความสามารถครบ 15 ช่อง (2 คอลัมน์)</li>
+              <li>แคปหน้าจอ แล้วลากรูปมาวาง / เลือกไฟล์ / กด Ctrl+V</li>
+              <li>ตรวจตัวเลขด้านขวา แก้ช่องที่ผิดได้ แล้วกด "ใส่ข้อมูล"</li>
+            </ol>
+            <p class="muted small">รูปถูกอ่านบนเครื่องของคุณ ไม่ถูกอัปโหลดไปไหน · ใช้ได้กับเกมภาษาไทย · ครั้งแรกจะโหลดข้อมูลภาษาประมาณ 3 MB</p>
+          </details>
+        </div>
+        <div class="ocr-right">
+          <div class="lbl">ของอัศวินตัวไหน</div>
+          <div class="chips">${notes.map((x, i) => html`<button type="button" class="chip-btn ${i === m.i ? 'on' : ''}" data-action="ocr-hero" data-i="${i}">${heroInfo(x.hero).base}</button>`)}</div>
+          ${status}
+          <div class="stat-edit">${STATS.map(
+            ([k, l]) => html`<label class="stat-pill ${m.status === 'done' && m.missing.includes(k) ? 'miss' : ''}">${AS.stats?.[k] ? html`<img src="${AS.stats[k]}" alt="" />` : ''}<span>${STAT_FULL[k] || l}</span><input type="number" step="any" value="${sc[k] ?? ''}" placeholder="—" data-bind="__ocr.stats.${k}" data-type="stat" />${PCT_STATS.has(k) ? html`<i>%</i>` : ''}</label>`,
+          )}</div>
+          ${m.raw ? html`<details class="ocr-raw"><summary class="small muted">ข้อความที่อ่านได้</summary><pre>${m.raw}</pre></details>` : ''}
+          <p class="muted small">ตรวจตัวเลขก่อนกดใส่ · ยังไม่บันทึกจนกด "บันทึก" ของหน้านั้น</p>
+          <div class="actions"><button type="button" class="btn" data-action="modal-close">ยกเลิก</button><button type="button" class="btn primary" data-action="ocr-apply" ${busy ? raw('disabled') : ''}>ใส่ข้อมูลให้ ${base}</button></div>
+        </div>
+      </div>`,
+      'wide',
+    );
+  }
+
+  if (m.kind === 'pick-notes') {
+    const list = m.list || [];
+    return wrap(
+      'เลือกจากที่จดไว้',
+      list.length
+        ? html`<div class="pick-notes">${list.map(
+            (item, i) => html`<div class="pick-note" role="button" tabindex="0" data-action="apply-saved-note" data-i="${i}">
+              <ul class="hero-detail">${heroDetailRow(item.n)}</ul>
+              <div class="muted small">${item.src} · อัปเดต ${item.ts ? lastAgoLabel(item.ts) : '—'}</div>
+            </div>`,
+          )}</div>`
+        : html`<p class="muted center">ยังไม่มีรายการของอัศวินในทีมนี้</p>`,
+      'wide',
+    );
+  }
+
   if (m.kind === 'copy-target') {
     return wrap(
       'เลือกจากบ้านศัตรูที่จดไว้',
@@ -1215,7 +1444,7 @@ function teamByKey(key) {
   }
   if (kind === 'p') {
     const o = findPlan(a)?.data?.slots?.[b]?.options?.[c];
-    return o && { team: o.team || emptyTeam(), skills: o.skills || [], notes: o.heroNotes || [], title: `${findPlan(a).data.slots[b].name} · ตัวเลือก ${Number(c) + 1}` };
+    return o && { team: o.team || emptyTeam(), skills: o.skills || [], notes: o.heroNotes || [], condition: o.condition, note: o.notes, title: `${findPlan(a).data.slots[b].name} · ${Number(c) ? `สำรอง ${c}` : 'ทีมหลัก'}` };
   }
   return null;
 }
@@ -1302,7 +1531,14 @@ function render() {
   const keep = ['.dock-strip', '.grid-groups'].map((s) => [s, $app.querySelector(s)?.scrollLeft, $app.querySelector(s)?.scrollTop]);
   const focusQ = document.activeElement?.hasAttribute?.('data-dock-q') ? document.activeElement.selectionStart : null;
   const page = fmt(route());
-  const dock = state.edit && !/\/c\/[\w-]+\/edit|\/c\/new/.test(location.hash) ? true : state.edit && state.step === 2;
+  const h = location.hash;
+  const dock = !state.edit
+    ? false
+    : /\/c\/[\w-]+\/edit|\/c\/new/.test(h)
+      ? state.step === 2
+      : /\/p\/[\w-]+\/edit/.test(h)
+        ? state.planWiz?.step === 1
+        : true;
   $app.innerHTML = page + (dock ? fmt(viewDock()) : '') + (state.modal ? fmt(viewModal()) : '');
   document.body.classList.toggle('has-dock', !!dock);
   for (const [s, l, t] of keep) {
@@ -1319,6 +1555,7 @@ addEventListener('hashchange', () => {
   state.activeTeam = null;
   state.modal = null;
   state.step = 2;
+  state.planWiz = null;
   state.ci = 0;
   if (location.hash !== '#/admin') state.admin = null;
   render();
@@ -1332,6 +1569,9 @@ async function refresh(hash) {
   if (hash && location.hash !== hash) location.hash = hash;
   else render();
 }
+
+// opened from inside the team-detail popup: closing returns to it
+const detailBack = () => (state.modal?.kind === 'detail' ? { back: 'detail', backKey: state.modal.key } : {});
 
 const actions = {
   login() {
@@ -1438,9 +1678,59 @@ const actions = {
     state.modal = { kind: 'pick-gear', path: el.dataset.path, k: Number(el.dataset.k), gear: el.dataset.kind };
     render();
   },
+  'open-stats'(el) {
+    const n = getPath(state.edit, el.dataset.path);
+    if (n) n.stats ||= {};
+    state.modal = { kind: 'stats', path: el.dataset.path };
+    render();
+  },
+  'stats-clear'(el) {
+    const n = getPath(state.edit, el.dataset.path);
+    if (n) n.stats = {};
+    render();
+  },
+  'hn-clear'(el) {
+    const n = getPath(state.edit, el.dataset.path);
+    if (!n) return;
+    n.text = '';
+    n.sets = [];
+    n.rings = [];
+    n.stats = {};
+    render();
+  },
+  'hn-use-last'(el) {
+    const n = getPath(state.edit, el.dataset.path);
+    const last = n && readLastStats(heroInfo(n.hero).base);
+    if (!last) return;
+    n.stats = { ...(last.stats || {}) };
+    n.sets = [...(last.sets || [])];
+    n.rings = [...(last.rings || [])];
+    render();
+  },
+  'pick-saved-notes'(el) {
+    const notes = getPath(state.edit, el.dataset.path) || [];
+    state.modal = { kind: 'pick-notes', path: el.dataset.path, list: collectSavedNotes(notes) };
+    render();
+  },
+  'apply-saved-note'(el) {
+    const item = state.modal?.list?.[Number(el.dataset.i)];
+    const notes = getPath(state.edit, state.modal?.path);
+    if (!item || !notes) return;
+    const base = heroInfo(item.n.hero).base;
+    const dest = notes.find((x) => heroInfo(x.hero).base === base);
+    if (dest) {
+      dest.stats = clone(item.n.stats || {});
+      dest.sets = [...(item.n.sets || [])];
+      dest.rings = [...(item.n.rings || [])];
+      dest.text = item.n.text || '';
+    }
+    state.modal = null;
+    render();
+  },
   'set-gear'(el) {
     const m = state.modal;
     const list = getPath(state.edit, m.path);
+    if (!Array.isArray(list)) return;
     const next = [...list];
     next[m.k] = el.dataset.name || null;
     // keep the list compact (no gaps) and unique
@@ -1465,8 +1755,8 @@ const actions = {
     render();
   },
   'open-detail': (el) => ((state.modal = { kind: 'detail', key: el.dataset.key }), render()),
-  'open-skillview': (el) => ((state.modal = { kind: 'skillview', key: el.dataset.key }), render()),
-  'open-speed': (el) => ((state.modal = { kind: 'speed', key: el.dataset.key }), render()),
+  'open-skillview': (el) => ((state.modal = { kind: 'skillview', key: el.dataset.key, ...detailBack() }), render()),
+  'open-speed': (el) => ((state.modal = { kind: 'speed', key: el.dataset.key, ...detailBack() }), render()),
   // ----- dock -----
   'dock-pick'(el) {
     const prefix = state.sel?.team || state.activeTeam;
@@ -1495,7 +1785,43 @@ const actions = {
     render();
   },
   'modal-close'() {
-    state.modal = state.modal?.back ? { kind: state.modal.back } : null;
+    const m = state.modal;
+    if (m?.kind === 'ocr') {
+      m.rid = -1; // ignore a read that is still running
+      delete state.edit?.__ocr;
+    }
+    state.modal = m?.backTo || (m?.back ? { kind: m.back, key: m.backKey } : null);
+    render();
+  },
+  'open-ocr'(el) {
+    if (!state.edit || !getPath(state.edit, el.dataset.path)?.length) return;
+    state.edit.__ocr = { stats: {} }; // scratch space, never part of a save payload (save-* send explicit fields)
+    state.modal = {
+      kind: 'ocr',
+      path: el.dataset.path,
+      i: Number(el.dataset.i) || 0,
+      status: 'idle',
+      missing: [],
+      backTo: el.dataset.fromStats ? { kind: 'stats', path: el.dataset.fromStats } : null,
+    };
+    render();
+  },
+  'ocr-hero'(el) {
+    if (state.modal?.kind !== 'ocr') return;
+    state.modal.i = Number(el.dataset.i) || 0;
+    render();
+  },
+  'ocr-apply'() {
+    const m = state.modal;
+    if (m?.kind !== 'ocr') return;
+    const n = getPath(state.edit, m.path)?.[m.i];
+    if (!n) return;
+    const sc = state.edit.__ocr?.stats || {};
+    n.stats ||= {};
+    for (const [k] of STATS) if (typeof sc[k] === 'number' && Number.isFinite(sc[k])) n.stats[k] = sc[k];
+    m.rid = -1;
+    delete state.edit.__ocr;
+    state.modal = m.backTo || null;
     render();
   },
   'set-filter'(el) {
@@ -1533,6 +1859,7 @@ const actions = {
     const body = { team: e.team, skills: e.skills, heroNotes: e.heroNotes, note: e.note };
     if (id === 'new') await api('POST', `/targets/${tid}/counters`, body);
     else await api('PUT', `/counters/${id}`, body);
+    rememberHeroNotes(e.heroNotes);
     toast('บันทึกแล้ว');
     await refresh(`#/t/${tid}`);
   },
@@ -1554,25 +1881,71 @@ const actions = {
   },
   'plan-slot-add'() {
     const slots = state.edit.data.slots;
-    slots.push({ name: `ไม้ ${slots.length + 1}`, kind: state.edit.data.kind, options: [{ team: emptyTeam(), skills: [], heroNotes: [], condition: '', notes: '' }] });
+    slots.push({ name: `ไม้ ${slots.length + 1}`, kind: state.edit.data.kind, options: [emptyOption()] });
+    openPlanWiz(slots.length - 1, 0, true);
     render();
+    scrollTo(0, 0);
   },
   'plan-slot-del'(el) {
     if (confirm('ลบไม้นี้?')) state.edit.data.slots.splice(Number(el.dataset.i), 1), render();
   },
   'plan-opt-add'(el) {
-    state.edit.data.slots[el.dataset.i].options.push({ team: emptyTeam(), skills: [], heroNotes: [], condition: '', notes: '' });
+    const si = Number(el.dataset.i);
+    const opts = state.edit.data.slots[si].options;
+    opts.push(emptyOption());
+    openPlanWiz(si, opts.length - 1, true);
     render();
+    scrollTo(0, 0);
   },
   'plan-opt-del'(el) {
     state.edit.data.slots[el.dataset.i].options.splice(Number(el.dataset.j), 1);
     render();
+  },
+  'plan-wiz-open'(el) {
+    openPlanWiz(Number(el.dataset.i), Number(el.dataset.j), false);
+    render();
+    scrollTo(0, 0);
+  },
+  'plan-wiz-step'(el) {
+    if (!state.planWiz) return;
+    state.planWiz.step = Number(el.dataset.step);
+    state.sel = null;
+    render();
+    scrollTo(0, 0);
+  },
+  'plan-wiz-cancel'() {
+    const w = state.planWiz;
+    if (!w || !state.edit) return;
+    const slots = state.edit.data.slots;
+    const slot = slots[w.si];
+    if (slot) {
+      slot.options[w.oi] = clone(w.snapshot);
+      const o = slot.options[w.oi];
+      const empty = !heroesOf(o.team || emptyTeam()).length;
+      if (w.fresh && empty) {
+        slot.options.splice(w.oi, 1);
+        if (!slot.options.length) slots.splice(w.si, 1);
+      }
+    }
+    state.planWiz = null;
+    state.sel = null;
+    state.activeTeam = null;
+    render();
+    scrollTo(0, 0);
+  },
+  'plan-wiz-done'() {
+    state.planWiz = null;
+    state.sel = null;
+    state.activeTeam = null;
+    render();
+    scrollTo(0, 0);
   },
   async 'save-plan'(el) {
     const id = el.dataset.id;
     const body = { title: state.edit.title, data: state.edit.data };
     const isNew = id.startsWith('new');
     const r = isNew ? await api('POST', '/plans', body) : await api('PUT', `/plans/${id}`, body);
+    for (const s of state.edit.data.slots || []) for (const o of s.options || []) rememberHeroNotes(o.heroNotes);
     toast('บันทึกแล้ว');
     await refresh(`#/p/${isNew ? r.id : id}`);
   },
@@ -1588,6 +1961,70 @@ const actions = {
     render();
   },
 };
+
+// ---------- screenshot OCR (lazy-loaded /ocr.js + self-hosted Tesseract) ----------
+let ocrSeq = 0;
+const OCR_PHASES = [
+  [/core/, 'กำลังโหลดตัวอ่านภาพ (ครั้งแรกเท่านั้น)'],
+  [/traineddata/, 'กำลังโหลดข้อมูลภาษา (ครั้งแรกเท่านั้น)'],
+  [/recogniz/, 'กำลังอ่านค่าจากรูป...'],
+];
+async function startOcr(file) {
+  const m = state.modal;
+  if (m?.kind !== 'ocr' || !file || m.status === 'loading') return;
+  if (!file.type.startsWith('image/')) return toast('ต้องเป็นไฟล์รูปภาพ', true);
+  const rid = ++ocrSeq;
+  Object.assign(m, { rid, status: 'loading', progress: 0, label: 'กำลังเตรียมรูป...', error: '', raw: '', missing: [] });
+  state.edit.__ocr = { stats: {} };
+  render();
+  // the user may close the modal / leave the page while we work: never touch state after that
+  const alive = () => state.modal === m && m.rid === rid;
+  const onProgress = (p) => {
+    if (!alive()) return;
+    const phase = OCR_PHASES.find(([re]) => re.test(p.status || ''));
+    m.label = phase ? phase[1] : 'กำลังเตรียมตัวอ่านภาพ...';
+    m.progress = Number(p.progress) || 0;
+    const bar = $app.querySelector('[data-ocr-progress]');
+    if (bar) bar.value = m.progress;
+    const lab = $app.querySelector('[data-ocr-label]');
+    if (lab) lab.textContent = m.label;
+  };
+  try {
+    const ocr = await import('/ocr.js');
+    const { canvas, preview } = await ocr.prepareImage(file);
+    if (!alive()) return;
+    m.preview = preview;
+    render();
+    const res = await ocr.recognizeCanvas(canvas, onProgress);
+    if (!alive()) return;
+    state.edit.__ocr = { stats: { ...res.stats } };
+    Object.assign(m, { status: 'done', raw: res.raw, missing: res.missing });
+  } catch (e) {
+    if (!alive()) return;
+    Object.assign(m, { status: 'error', error: 'อ่านรูปไม่สำเร็จ: ' + (e?.message || 'ไม่ทราบสาเหตุ') + ' — ลองรูปอื่น หรือกรอกเอง' });
+  }
+  render();
+}
+
+const imageOf = (files) => [...(files || [])].find((f) => f.type?.startsWith('image/'));
+document.addEventListener('paste', (ev) => {
+  if (state.modal?.kind !== 'ocr') return;
+  const f = imageOf(ev.clipboardData?.files);
+  if (f) ev.preventDefault(), startOcr(f);
+});
+document.addEventListener('dragover', (ev) => {
+  if (state.modal?.kind !== 'ocr') return;
+  ev.preventDefault();
+  ev.target.closest?.('[data-drop]')?.classList.add('over');
+});
+document.addEventListener('dragleave', (ev) => ev.target.closest?.('[data-drop]')?.classList.remove('over'));
+document.addEventListener('drop', (ev) => {
+  if (state.modal?.kind !== 'ocr') return;
+  ev.preventDefault(); // never let the browser navigate to a dropped file
+  ev.target.closest?.('[data-drop]')?.classList.remove('over');
+  const f = imageOf(ev.dataTransfer?.files);
+  if (f) startOcr(f);
+});
 
 const forms = {
   async unlock(f) {
@@ -1699,6 +2136,12 @@ document.addEventListener('keydown', (ev) => {
 
 document.addEventListener('change', async (ev) => {
   const el = ev.target;
+  if (el.hasAttribute('data-ocr-file')) {
+    const f = el.files?.[0];
+    el.value = '';
+    if (f) startOcr(f);
+    return;
+  }
   if (el.dataset.bind && el.hasAttribute('data-rerender')) render();
   if (el.dataset.memberRole) {
     try {

@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.discordapp.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; img-src 'self' data: https://cdn.discordapp.com; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
@@ -15,6 +15,9 @@
 
 /assets.json
   Cache-Control: public, max-age=3600, stale-while-revalidate=604800
+
+/vendor/*
+  Cache-Control: public, max-age=604800, stale-while-revalidate=2592000
 
 /favicon.svg
   Cache-Control: public, max-age=604800
