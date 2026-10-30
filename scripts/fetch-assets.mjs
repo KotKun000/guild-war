@@ -49,6 +49,11 @@ const HERO_ALIASES = {
   'Giyu Tomioka': ['กิยู'],
   'Shinobu Kocho': ['ชิโนบุ'],
   Freyja: ['เฟรย่า'],
+  // 7K Note spells these differently: extra aliases make their skill lists match (first alias stays the display name)
+  Karma: ['คาร์ม่า', 'คาร์มา'],
+  Chancellor: ['ชานซะเลอร์', 'ชานชะเลอร์'],
+  Klahan: ['พยัคฆ์เมฆา', 'คลาฮาน'],
+  Rachel: ['ราเชล', 'เรเชล'],
 };
 const PET_ALIASES = { Richel: ['รีเซล'] };
 

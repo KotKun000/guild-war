@@ -386,7 +386,8 @@ function skillsOf(name) {
   const info = heroInfo(name);
   const h = AS.hero.get(info.base);
   const suffix = (name || '').slice(info.base.length);
-  const keys = [name, ...(h?.aliases || []).map((a) => a + suffix), ...(h?.aliases || []).map((a) => (info.awake ? `${a} awake` : a))];
+  // last resort: heroes without a separate "awake" entry keep all their skills (incl. the awake one) under the plain name
+  const keys = [name, ...(h?.aliases || []).map((a) => a + suffix), ...(h?.aliases || []).map((a) => (info.awake ? `${a} awake` : a)), ...(h?.aliases || [])];
   for (const k of keys) {
     const list = AS.skills?.[k];
     if (list) return list.filter(Boolean).map((s) => ({ n: SKILL_KIND[s.kind], name: s.name, img: s.img })).filter((s) => s.n).sort((a, b) => SKILL_ORDER.indexOf(a.n) - SKILL_ORDER.indexOf(b.n));
@@ -395,14 +396,40 @@ function skillsOf(name) {
 }
 const skillInfo = (heroName, n) => skillsOf(heroName).find((s) => s.n === n) || { n, name: SKILL_LABEL[n], img: null };
 
-const ys = (n) => (n <= 1 ? [50] : [...Array(n).keys()].map((i) => 24 + (52 * i) / (n - 1)));
 const spark = (x, y, cls, s = 0.62) => raw(`<path class="${cls}" transform="translate(${x} ${y}) scale(${s})" d="${SPARK}"/>`);
 const orbRing = raw('<circle cx="50" cy="50" r="44" class="orb-ring"/>');
 
+// star columns like 7K Note: n stars step down-left, fewer stars = bigger stars
+const FORM_SPARK = 'M0-12 C1 -3 3 -1 12 0 C3 1 1 3 0 12 C-1 3 -3 1 -12 0 C-3 -1 -1 -3 0-12Z';
+const FORM_SCALE = { 1: 0.82, 2: 0.82, 3: 0.72, 4: 0.62 };
+const FORM_GAP = { 1: 0, 2: 18, 3: 16, 4: 13 };
+function formationColumn(n, x0, cls) {
+  return [...Array(n).keys()].map((i) => {
+    const x = x0 + 1.25 * (n - 1) - 2.5 * i;
+    const y = 50 + (i - (n - 1) / 2) * FORM_GAP[n];
+    return raw(`<path class="${cls}" transform="translate(${+x.toFixed(2)} ${+y.toFixed(2)}) scale(${FORM_SCALE[n]})" d="${FORM_SPARK}"/>`);
+  });
+}
+
 function formationOrb(f) {
-  const back = ys(5 - f).map((y) => spark(5 - f === 1 ? 36 : 34, y, 'sp-back', 5 - f === 1 ? 0.82 : 0.6));
-  const front = ys(f).map((y, i) => spark(66 - i * 0.8, y, 'sp-front', f === 1 ? 0.82 : 0.6));
-  return html`<svg viewBox="0 0 100 100" class="orb-svg">${orbRing}${back}${front}</svg>`;
+  return html`<svg viewBox="0 0 100 100" class="orb-svg">${orbRing}${formationColumn(5 - f, 36, 'sp-back')}${formationColumn(f, 64, 'sp-front')}</svg>`;
+}
+
+// formation picker preview (like 7K Note): numbered red pawns = back row, blue shields = front row
+const FORMATION_EN = { 2: 'Basic', 3: 'Balanced', 1: 'Attack', 4: 'Protective' };
+function formationDiagram(f) {
+  const b = 5 - f;
+  const pawn = (n, x, y) =>
+    `<g transform="translate(${x} ${y})"><ellipse cx="0" cy="9" rx="9" ry="3.5" fill="#9b2c43"/><circle cx="0" cy="-1" r="9.5" fill="url(#gRed)" stroke="#ffe0e6" stroke-width="1.2"/><text y="3.5" text-anchor="middle" font-size="12" font-weight="800" fill="#fff">${n}</text></g>`;
+  const shield = (n, x, y) =>
+    `<g transform="translate(${x} ${y})"><path d="M0-13 L11-8 L10 4 Q6 11 0 14 Q-6 11 -10 4 L-11-8Z" fill="url(#gBlue)" stroke="#dfe6ff" stroke-width="1.2"/><text y="4" text-anchor="middle" font-size="13" font-weight="800" fill="#fff">${n}</text></g>`;
+  const backY0 = 50 + 4 * b;
+  const frontY = 68 - 6 * f;
+  const back = [...Array(b).keys()].map((j) => pawn(f + 1 + j, 22 + 13 * j, backY0 - 9 * j));
+  const front = [...Array(f).keys()].map((i) => shield(i + 1, 80 - 13 * (f - 1 - i), frontY + 9 * (f - 1 - i)));
+  return raw(
+    `<svg viewBox="0 0 150 90" class="fm-diagram" aria-hidden="true"><defs><linearGradient id="gBlue" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fb0ff"/><stop offset="1" stop-color="#3453c9"/></linearGradient><linearGradient id="gRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff8a9a"/><stop offset="1" stop-color="#c02a48"/></linearGradient></defs>${back.join('')}${front.join('')}</svg>`,
+  );
 }
 
 function skillOrb(count) {
@@ -1275,11 +1302,11 @@ function viewModal() {
       'รูปแบบการจัดทีม (Formation)',
       html`<div class="fmgrid">${[2, 3, 1, 4].map(
         (f) => html`<button type="button" class="fmopt ${team.front === f ? 'active' : ''}" data-action="set-formation" data-team="${m.team}" data-f="${f}">
-          <span class="orb fm-preview">${formationOrb(f)}</span><b>${team.front === f ? '✓ ' : ''}รูปแบบ${FORMATIONS[f]}</b><span class="muted small">หน้า ${f} · หลัง ${5 - f}</span>
+          ${formationDiagram(f)}<b>${team.front === f ? '✓ ' : ''}รูปแบบ${FORMATIONS[f]}</b><span class="muted small">${FORMATION_EN[f]} · หน้า ${f} หลัง ${5 - f}</span>
         </button>`,
       )}</div>
-      <p class="muted small"><span class="blue">ดาวน้ำเงิน</span> = แถวหน้า · <span class="red">ดาวแดง</span> = แถวหลัง</p>`,
-      'small',
+      <p class="muted small"><span class="blue">โล่น้ำเงิน</span> = แถวหน้า · <span class="red">หมากแดง</span> = แถวหลัง</p>`,
+      'medium',
     );
   }
 

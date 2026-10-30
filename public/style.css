@@ -602,7 +602,10 @@ label.stat-pill i { font-style: normal; color: var(--muted); font-size: 0.8rem; 
 @media (min-width: 1280px) { .plan-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 .plan-tile { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .plan-tile { cursor: pointer; border-radius: 16px; }
-.plan-tile .board { --s: 58px; padding: 10px 12px 12px; }
+/* every team panel has the same height (room for a 4-hero column), content centered, like 7K Note */
+.plan-tile .board { --s: 58px; padding: 10px 12px 12px; height: calc(var(--s) * 4 + 190px); display: flex; flex-direction: column; }
+.plan-tile .board-grid { flex: 1; min-height: 0; margin: 4px 0; }
+.plan-tile .reserve { margin-top: 4px; white-space: nowrap; }
 .plan-tile .board, .edit-hit .board { transition: border-color .15s, box-shadow .15s; }
 .plan-tile:hover .board, .plan-tile:focus-visible .board,
 .edit-hit:hover .board, .edit-hit:focus-visible .board { border-color: rgba(241, 199, 106, 0.8); box-shadow: 0 0 18px rgba(241, 199, 106, 0.28); }
@@ -620,7 +623,6 @@ label.stat-pill i { font-style: normal; color: var(--muted); font-size: 0.8rem; 
 }
 .edit-hit:hover .edit-hint, .edit-hit:focus-visible .edit-hint { opacity: 1; }
 .plan-tile .board-head b { font-size: 1rem; }
-.plan-tile .board-grid { min-height: calc(var(--s) * 3 + 40px); }
 .tile-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; }
 .tile-link { background: none; border: none; padding: 2px 6px; font: inherit; font-size: 0.78rem; color: var(--muted); cursor: pointer; }
 .tile-link:hover { color: var(--gold); }
@@ -747,6 +749,10 @@ body.has-dock main { padding-bottom: 200px; }
 .fmgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .fmopt { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 10px; border-radius: 12px; border: 1px solid var(--line2); background: var(--bg2); color: var(--text); font: inherit; cursor: pointer; }
 .fmopt .fdots { transform: scale(1.8); margin: 8px 0; }
+.fm-diagram { display: block; width: 100%; max-width: 210px; height: 96px; margin: 0 auto; }
+.fmopt { border-width: 2px; border-radius: 16px; padding: 10px 8px; background: rgba(0, 0, 0, 0.2); }
+.fmopt:hover { border-color: rgba(255, 255, 255, 0.4); }
+.fmopt.active { box-shadow: 0 0 18px rgba(244, 213, 141, 0.45); }
 .fmopt.active { border-color: var(--gold); background: rgba(241, 199, 106, 0.1); }
 .sk-order { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
 .sk-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; border-radius: 999px; background: #221d3a; border: 1px solid #3f3566; font-size: 0.82rem; }
