@@ -450,7 +450,7 @@ const BLOCKED_SVG = raw(
 
 // blocked = team already has MAX_HEROES, this empty slot cannot take another hero
 function heroCard(name, { cls = '', attrs = raw(''), orders = [], blocked = false } = {}) {
-  if (!name && blocked) return html`<div class="ucard empty blocked ${cls}" ${attrs} title="ทีมครบ ${MAX_HEROES} ตัวแล้ว">${BLOCKED_SVG}</div>`;
+  if (!name && blocked) return html`<div class="ucard empty blocked ${cls}" ${attrs} title="ทีมมีอัศวินครบ ${MAX_HEROES} ตัวแล้ว เอาตัวเดิมออกก่อนถึงจะเพิ่มได้">${BLOCKED_SVG}</div>`;
   if (!name) return html`<div class="ucard empty ${cls}" ${attrs}><span class="plus">+</span></div>`;
   const info = heroInfo(name);
   const h = AS.hero.get(info.base);
@@ -990,8 +990,9 @@ function viewPlan(id) {
       const o = opts[0];
       if (!o) return '';
       const key = (i) => `p:${p.id}:${si}:${i}`;
-      return html`<div class="plan-tile" role="button" tabindex="0" data-action="open-detail" data-key="${key(0)}">
-        ${teamView(o.team || emptyTeam(), o.skills || [], { title: s.name, view: { key: key(0) } })}
+      const tc = TYPE_CLASS[s.type];
+      return html`<div class="plan-tile ${tc ? `tc-${tc}` : ''}" role="button" tabindex="0" data-action="open-detail" data-key="${key(0)}">
+        ${teamView(o.team || emptyTeam(), o.skills || [], { title: s.type ? html`${s.name} ${tagPill(s.type)}` : s.name, view: { key: key(0) } })}
         <div class="tile-foot">
           <button type="button" class="tile-link" data-action="open-detail" data-key="${key(0)}">กดดูรายละเอียด</button>
           ${opts.slice(1).map((_, j) => html`<button type="button" class="tile-link reserve" data-action="open-detail" data-key="${key(j + 1)}">สำรอง ${j + 1}</button>`)}
@@ -1054,9 +1055,12 @@ function viewPlanEditOverview(e, id) {
     </div>
     <div class="plan-cards">${e.data.slots.map((s, si) => {
       s.options.forEach((o) => syncTeam(o.team, o.skills, o.heroNotes));
-      return html`<div class="slot-card">
+      return html`<div class="slot-card ${TYPE_CLASS[s.type] ? `tc-${TYPE_CLASS[s.type]}` : ''}">
         <div class="slot-head"><input class="slot-name" value="${s.name}" data-bind="data.slots.${si}.name" />
           <button type="button" class="btn icon small danger slot-del" data-action="plan-slot-del" data-i="${si}" title="ลบไม้นี้">${icon('trash')}</button></div>
+        <div class="tag-pick slot-type" title="ประเภทบ้าน">
+          ${TYPE_TAGS.map((x) => html`<button type="button" class="tagbtn type tt-${TYPE_CLASS[x]} ${s.type === x ? 'on' : ''}" data-action="plan-slot-type" data-i="${si}" data-type="${x}">${s.type === x ? '✓ ' : ''}${x}</button>`)}
+        </div>
         <div class="plan-options">${s.options.map(
           (o, oi) => html`<div class="option">
             <div class="edit-hit" role="button" tabindex="0" data-action="plan-wiz-open" data-i="${si}" data-j="${oi}" title="แตะเพื่อแก้ไขทีม">
@@ -1924,6 +1928,14 @@ const actions = {
     openPlanWiz(slots.length - 1, 0, true);
     render();
     scrollTo(0, 0);
+  },
+  'plan-slot-type'(el) {
+    const s = state.edit.data.slots[Number(el.dataset.i)];
+    if (!s) return;
+    // like the enemy-house type: pick one, tap again to clear
+    if (s.type === el.dataset.type) delete s.type;
+    else s.type = el.dataset.type;
+    render();
   },
   'plan-slot-del'(el) {
     if (confirm('ลบไม้นี้?')) state.edit.data.slots.splice(Number(el.dataset.i), 1), render();

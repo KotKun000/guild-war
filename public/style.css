@@ -556,7 +556,7 @@ label.stat-pill i { font-style: normal; color: var(--muted); font-size: 0.8rem; 
 
 /* ---------- plan wizard + hero-notes table ---------- */
 .plan-cards {
-  display: flex; gap: 16px; align-items: flex-start; overflow-x: auto; padding: 14px 4px 12px;
+  display: flex; gap: 16px; align-items: stretch; overflow-x: auto; padding: 14px 4px 12px;
   width: min(calc(100vw - 40px), 1600px); position: relative; left: 50%; transform: translateX(-50%);
 }
 .plan-cards .actions { justify-content: center; margin-top: 8px; gap: 6px; }
@@ -580,10 +580,16 @@ label.stat-pill i { font-style: normal; color: var(--muted); font-size: 0.8rem; 
 .slot-card .option { min-width: 0; max-width: none; border-top: 1px dashed var(--line2); border-left: none; padding: 10px 0 0; margin-top: 10px; }
 .slot-card .option:first-child { border-top: none; margin-top: 0; padding-top: 0; }
 .slot-card .option:not(:first-child) { padding-left: 0; }
-.slot-card .board { --s: 48px; padding: 8px 8px 10px; box-shadow: none; }
+/* every team board has the same height (room for a 4-hero column), like the plan view; cards in a row stretch to the tallest */
+.slot-card { display: flex; flex-direction: column; }
+.slot-card .board { --s: 48px; padding: 8px 8px 10px; box-shadow: none; height: calc(var(--s) * 4 + 190px); display: flex; flex-direction: column; }
+.slot-card .board-grid { flex: 1; min-height: 0; margin: 4px 0; }
+.slot-card .reserve { margin-top: 4px; }
+.slot-card > .btn { margin-top: auto !important; }
+.slot-card .plan-options { flex: 1; }
 .slot-card > .btn { display: block; width: 100%; margin-top: 12px; }
 .slot-add {
-  flex: 0 0 280px; min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  flex: 0 0 280px; min-height: 420px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   border: 2px dashed var(--line2); border-radius: 16px; background: transparent; color: var(--muted); font: inherit; cursor: pointer;
 }
 .slot-add .plus { font-size: 3rem; line-height: 1; color: var(--gold2); }
@@ -607,7 +613,8 @@ label.stat-pill i { font-style: normal; color: var(--muted); font-size: 0.8rem; 
 /* every team panel has the same height (room for a 4-hero column), content centered, like 7K Note */
 .plan-tile .board { --s: 58px; padding: 10px 12px 12px; height: calc(var(--s) * 4 + 190px); display: flex; flex-direction: column; }
 .plan-tile .board-grid { flex: 1; min-height: 0; margin: 4px 0; }
-.plan-tile .reserve { margin-top: 4px; white-space: nowrap; }
+.plan-tile .reserve { margin-top: 4px; white-space: nowrap; gap: 4px; font-size: 0.62rem; }
+.plan-tile .reserve .ucard.pet.small { width: 40px; height: 40px; }
 .plan-tile .board, .edit-hit .board { transition: border-color .15s, box-shadow .15s; }
 .plan-tile:hover .board, .plan-tile:focus-visible .board,
 .edit-hit:hover .board, .edit-hit:focus-visible .board { border-color: rgba(241, 199, 106, 0.8); box-shadow: 0 0 18px rgba(241, 199, 106, 0.28); }
@@ -624,7 +631,16 @@ label.stat-pill i { font-style: normal; color: var(--muted); font-size: 0.8rem; 
   opacity: 0; pointer-events: none; transition: opacity .15s;
 }
 .edit-hit:hover .edit-hint, .edit-hit:focus-visible .edit-hint { opacity: 1; }
-.plan-tile .board-head b { font-size: 1rem; }
+.plan-tile .board-head b { font-size: 1rem; display: inline-flex; align-items: center; gap: 6px; }
+/* frame colour by house type, same palette as the enemy-house cards */
+.plan-tile.tc-phys .board, .plan-tile.tc-magic .board, .plan-tile.tc-tank .board { border-width: 2px; }
+.plan-tile.tc-phys .board, .slot-card.tc-phys { border-color: color-mix(in srgb, var(--tag-phys) 75%, transparent); }
+.plan-tile.tc-magic .board, .slot-card.tc-magic { border-color: color-mix(in srgb, var(--tag-magic) 75%, transparent); }
+.plan-tile.tc-tank .board, .slot-card.tc-tank { border-color: color-mix(in srgb, var(--tag-tank) 75%, transparent); }
+.plan-tile.tc-phys:hover .board { border-color: var(--tag-phys); box-shadow: 0 0 18px color-mix(in srgb, var(--tag-phys) 40%, transparent); }
+.plan-tile.tc-magic:hover .board { border-color: var(--tag-magic); box-shadow: 0 0 18px color-mix(in srgb, var(--tag-magic) 40%, transparent); }
+.plan-tile.tc-tank:hover .board { border-color: var(--tag-tank); box-shadow: 0 0 18px color-mix(in srgb, var(--tag-tank) 40%, transparent); }
+.slot-card .slot-type { justify-content: center; margin: -2px 0 8px; }
 .tile-foot { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 12px; }
 .tile-link { background: none; border: none; padding: 2px 6px; font: inherit; font-size: 0.78rem; color: var(--muted); cursor: pointer; }
 .tile-link:hover { color: var(--gold); }
@@ -856,9 +872,16 @@ body.has-dock main { padding-bottom: 200px; }
 .tagbtn.type.tt-tank.on { background: linear-gradient(180deg, #e3a04e, #a86617); border-color: #ffc983; color: #fff; }
 
 /* empty slot when the team already has 3 heroes */
-.ucard.empty.blocked { background: linear-gradient(160deg, #4a1d27, #2a1119); border-color: #7a2c3a; color: #ff6b7d; display: grid; place-items: center; }
-.blocked-svg { width: 62%; height: 62%; }
-.blocked-svg path { stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; }
+/* full team: same calm dark slot as an empty one, with a faint slash (no red alarm colours) */
+.ucard.empty.blocked {
+  color: rgba(255, 190, 210, 0.85); cursor: not-allowed; border: 1.5px solid rgba(190, 96, 128, 0.5);
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.025) 0 2px, transparent 2px 4px), linear-gradient(160deg, #46263a, #33202f);
+  box-shadow: inset 0 0 0 1px rgba(255, 140, 170, 0.08), 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.ucard.empty.blocked { display: block; }
+/* .ucard.empty also matches the generic ".empty svg" panel rule (34px), so this must be more specific */
+.ucard.empty.blocked .blocked-svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; margin: 0; color: inherit; stroke-width: 1; }
+.blocked-svg path { stroke: currentColor; stroke-width: 3.2; stroke-linecap: round; fill: none; }
 .blocked-svg circle { fill: currentColor; }
 
 /* ---------- OCR: read stats from a screenshot ---------- */
